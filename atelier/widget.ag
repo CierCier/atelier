@@ -1,0 +1,18 @@
+// Widget protocols: immediate-mode render contracts.
+//
+// A widget draws its current state into a buffer rectangle; stateful
+// widgets additionally read/write an external state value (selection,
+// scroll offset) owned by the application. There are no closures anywhere:
+// the application loop calls render directly, then flushes the terminal.
+
+import atelier.buffer;
+import atelier.layout;
+
+trait Widget {
+    void render(*self, Rect* area, Buffer* buf);
+}
+
+trait StatefulWidget {
+    type State;
+    void render(*self, Rect* area, Buffer* buf, State* state);
+}

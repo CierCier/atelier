@@ -3,3 +3,5 @@ import atelier.style;
 import atelier.text;
 import atelier.layout;
 import atelier.buffer;
+import atelier.widget;
+import atelier.terminal;

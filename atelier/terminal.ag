@@ -1,0 +1,255 @@
+// Terminal driver: double-buffered rendering with minimal escape output.
+//
+// The application renders widgets into the back buffer (via Frame), then
+// flush() diffs against the front buffer and emits only changed cells:
+// cursor moves are skipped for adjacent cells and style changes re-emit
+// SGR from a tracked baseline. No closures: the loop is explicit.
+//
+//     Terminal t = Terminal.full_screen(&STDOUT);
+//     t.hide_cursor();
+//     Frame f = t.frame();
+//     my_ui(&f);
+//     t.flush();
+
+import std.mem.vec;
+import std.io.file;
+import std.ops;
+import std.term;
+import atelier.style;
+import atelier.buffer;
+import atelier.layout;
+import atelier.widget;
+
+struct Frame {
+    Buffer* buf;
+    Rect area;
+}
+
+struct Terminal {
+    Buffer cur;
+    Buffer prev;
+    Rect area;
+    BufWriter* out;
+    Style pen;
+    i64 pen_x;
+    i64 pen_y;
+}
+
+/// Encode one codepoint as UTF-8 into the writer (surrogates become '?').
+void write_codepoint(BufWriter* out, u32 cp) {
+    if (cp < (u32)0x80) {
+        out.write_u8((u8)cp);
+    } else if (cp < (u32)0x800) {
+        out.write_u8((u8)((u32)0xC0 | (cp >> (u32)6)));
+        out.write_u8((u8)((u32)0x80 | (cp & (u32)0x3F)));
+    } else if (cp < (u32)0x10000) {
+        if (cp >= (u32)0xD800 && cp <= (u32)0xDFFF) {
+            cp = (u32)63; // '?'
+        }
+        out.write_u8((u8)((u32)0xE0 | (cp >> (u32)12)));
+        out.write_u8((u8)((u32)0x80 | ((cp >> (u32)6) & (u32)0x3F)));
+        out.write_u8((u8)((u32)0x80 | (cp & (u32)0x3F)));
+    } else {
+        out.write_u8((u8)((u32)0xF0 | (cp >> (u32)18)));
+        out.write_u8((u8)((u32)0x80 | ((cp >> (u32)12) & (u32)0x3F)));
+        out.write_u8((u8)((u32)0x80 | ((cp >> (u32)6) & (u32)0x3F)));
+        out.write_u8((u8)((u32)0x80 | (cp & (u32)0x3F)));
+    }
+}
+
+void term_write_fg(BufWriter* out, Color* c) {
+    match *c {
+        Black : { term_set_fg(out, TERM_BLACK); },
+        Red : { term_set_fg(out, TERM_RED); },
+        Green : { term_set_fg(out, TERM_GREEN); },
+        Yellow : { term_set_fg(out, TERM_YELLOW); },
+        Blue : { term_set_fg(out, TERM_BLUE); },
+        Magenta : { term_set_fg(out, TERM_MAGENTA); },
+        Cyan : { term_set_fg(out, TERM_CYAN); },
+        White : { term_set_fg(out, TERM_WHITE); },
+        BrightBlack : { term_set_fg(out, TERM_BLACK + TERM_BRIGHT); },
+        BrightRed : { term_set_fg(out, TERM_RED + TERM_BRIGHT); },
+        BrightGreen : { term_set_fg(out, TERM_GREEN + TERM_BRIGHT); },
+        BrightYellow : { term_set_fg(out, TERM_YELLOW + TERM_BRIGHT); },
+        BrightBlue : { term_set_fg(out, TERM_BLUE + TERM_BRIGHT); },
+        BrightMagenta : { term_set_fg(out, TERM_MAGENTA + TERM_BRIGHT); },
+        BrightCyan : { term_set_fg(out, TERM_CYAN + TERM_BRIGHT); },
+        BrightWhite : { term_set_fg(out, TERM_WHITE + TERM_BRIGHT); },
+        Indexed(n) : { term_set_fg256(out, (i64)n); },
+        Rgb(r, g, b) : { term_set_fg_rgb(out, (i64)r, (i64)g, (i64)b); },
+        _ : {},
+    }
+}
+
+void term_write_bg(BufWriter* out, Color* c) {
+    match *c {
+        Black : { term_set_bg(out, TERM_BLACK); },
+        Red : { term_set_bg(out, TERM_RED); },
+        Green : { term_set_bg(out, TERM_GREEN); },
+        Yellow : { term_set_bg(out, TERM_YELLOW); },
+        Blue : { term_set_bg(out, TERM_BLUE); },
+        Magenta : { term_set_bg(out, TERM_MAGENTA); },
+        Cyan : { term_set_bg(out, TERM_CYAN); },
+        White : { term_set_bg(out, TERM_WHITE); },
+        BrightBlack : { term_set_bg(out, TERM_BLACK + TERM_BRIGHT); },
+        BrightRed : { term_set_bg(out, TERM_RED + TERM_BRIGHT); },
+        BrightGreen : { term_set_bg(out, TERM_GREEN + TERM_BRIGHT); },
+        BrightYellow : { term_set_bg(out, TERM_YELLOW + TERM_BRIGHT); },
+        BrightBlue : { term_set_bg(out, TERM_BLUE + TERM_BRIGHT); },
+        BrightMagenta : { term_set_bg(out, TERM_MAGENTA + TERM_BRIGHT); },
+        BrightCyan : { term_set_bg(out, TERM_CYAN + TERM_BRIGHT); },
+        BrightWhite : { term_set_bg(out, TERM_WHITE + TERM_BRIGHT); },
+        Indexed(n) : { term_set_bg256(out, (i64)n); },
+        Rgb(r, g, b) : { term_set_bg_rgb(out, (i64)r, (i64)g, (i64)b); },
+        _ : {},
+    }
+}
+
+/// Emit one raw SGR numeric attribute (for modifiers std.term lacks).
+void term_write_sgr_num(BufWriter* out, i64 n) {
+    term_write_csi(out);
+    term_write_num(out, n);
+    out.write_u8((u8)109); // 'm'
+}
+
+void term_write_mods(BufWriter* out, u16 mods) {
+    if ((mods & MOD_BOLD) != (u16)0) {
+        term_bold_on(out);
+    }
+    if ((mods & MOD_DIM) != (u16)0) {
+        term_write_sgr_num(out, 2);
+    }
+    if ((mods & MOD_ITALIC) != (u16)0) {
+        term_write_sgr_num(out, 3);
+    }
+    if ((mods & MOD_UNDERLINED) != (u16)0) {
+        term_underline_on(out);
+    }
+    if ((mods & MOD_SLOW_BLINK) != (u16)0) {
+        term_write_sgr_num(out, 5);
+    }
+    if ((mods & MOD_RAPID_BLINK) != (u16)0) {
+        term_write_sgr_num(out, 6);
+    }
+    if ((mods & MOD_REVERSED) != (u16)0) {
+        term_write_sgr_num(out, 7);
+    }
+    if ((mods & MOD_HIDDEN) != (u16)0) {
+        term_write_sgr_num(out, 8);
+    }
+    if ((mods & MOD_CROSSED_OUT) != (u16)0) {
+        term_write_sgr_num(out, 9);
+    }
+}
+
+/// Full style re-emit from a reset baseline (always correct, slightly
+/// verbose; the diff layer ensures it only runs on real changes).
+void term_write_style(BufWriter* out, Style* s) {
+    term_sgr_reset(out);
+    term_write_fg(out, &s.fg);
+    term_write_bg(out, &s.bg);
+    term_write_mods(out, s.add_mod & ~s.sub_mod);
+}
+
+impl Terminal {
+    Terminal new(BufWriter* out, Rect area) {
+        Terminal t;
+        t.cur = Buffer.empty(area);
+        t.prev = Buffer.empty(area);
+        t.area = area;
+        t.out = out;
+        t.pen = Style.new();
+        t.pen_x = -1;
+        t.pen_y = -1;
+        return move t;
+    }
+
+    /// Size from our own tty, falling back to 80x24 (pipes, tests).
+    Terminal full_screen(BufWriter* out) {
+        i64 rows = 24;
+        i64 cols = 80;
+        Result<TermSize, Error> r = term_get_size(0);
+        if (r.is_ok()) {
+            TermSize t = r.unwrap();
+            if (t.rows > 0 && t.cols > 0) {
+                rows = t.rows;
+                cols = t.cols;
+            }
+        }
+        return Terminal.new(out, Rect.new((u16)0, (u16)0, (u16)cols, (u16)rows));
+    }
+
+    Frame frame(*self) {
+        Frame f;
+        f.buf = &self.cur;
+        f.area = self.area;
+        return f;
+    }
+
+    void hide_cursor(*self) {
+        term_hide_cursor(self.out);
+        self.out.flush();
+    }
+
+    void show_cursor(*self) {
+        term_show_cursor(self.out);
+        self.out.flush();
+    }
+
+    /// Diff the back buffer to the screen, then rotate buffers. The new
+    /// back buffer keeps its (stale) contents: the application re-renders
+    /// fully every frame, and untouched cells diff clean.
+    void flush(&mut self) {
+        Vec<CellUpdate> d = self.cur.diff(&self.prev);
+        for (i64 i = 0; i < d.len(); i = i + 1) {
+            CellUpdate* u = d.get_ptr(i);
+            i64 x = (i64)u.x;
+            i64 y = (i64)u.y;
+            if (x != self.pen_x || y != self.pen_y) {
+                term_move_to(self.out, y + 1, x + 1);
+            }
+            Style cs;
+            cs.fg = u.cell.fg;
+            cs.bg = u.cell.bg;
+            cs.add_mod = u.cell.mods;
+            cs.sub_mod = (u16)0;
+            if (cs.fg != self.pen.fg || cs.bg != self.pen.bg || cs.add_mod != self.pen.add_mod) {
+                term_write_style(self.out, &cs);
+                self.pen = cs;
+            }
+            u32 ch = u.cell.ch;
+            if (ch == (u32)0) {
+                ch = (u32)32;
+            }
+            write_codepoint(self.out, ch);
+            self.pen_x = x + 1;
+            self.pen_y = y;
+        }
+        self.out.flush();
+        Buffer tmp = move self.cur;
+        self.cur = move self.prev;
+        self.prev = move tmp;
+    }
+
+    /// Erase the screen and forget all state (forces a full redraw next).
+    void clear(&mut self) {
+        term_erase_screen(self.out);
+        term_move_to(self.out, 1, 1);
+        self.out.flush();
+        self.cur.reset();
+        self.prev.reset();
+        self.pen = Style.new();
+        self.pen_x = -1;
+        self.pen_y = -1;
+    }
+
+    /// Resize both buffers, forgetting contents.
+    void resize(&mut self, i64 cols, i64 rows) {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)cols, (u16)rows);
+        self.area = a;
+        self.cur.resize(a);
+        self.prev.resize(a);
+        self.pen_x = -1;
+        self.pen_y = -1;
+    }
+}

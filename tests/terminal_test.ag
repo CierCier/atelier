@@ -1,0 +1,39 @@
+import atelier.terminal;
+import atelier.buffer;
+import atelier.layout;
+import std.io.file;
+import std.test;
+
+i32 main() {
+    test_start("flush emits only changes");
+    {
+        u8 scratch[4096];
+        BufWriter w;
+        w.data = (i64)&scratch[0];
+        w.len = 0;
+        w.cap = -4096;
+        w.fd = -1;
+        w.list_next = (BufWriter*)0;
+        w.list_prev = (BufWriter*)0;
+        w.mode = IOMODE_MEMORY;
+        Terminal t = Terminal.new(&w, Rect.new((u16)0, (u16)0, (u16)5, (u16)1));
+        Frame f = t.frame();
+        f.buf.set_string(0, 0, "hi", Style.new(), 5);
+        t.flush();
+        i64 first_len = w.len;
+        assert_true(first_len > 2, "first flush emits bytes");
+        w.len = 0;
+        // Full re-render of identical content diffs clean.
+        Frame f1 = t.frame();
+        f1.buf.set_string(0, 0, "hi", Style.new(), 5);
+        t.flush();
+        assert_eq_i64(0, w.len, "no-change flush emits nothing");
+        // One cell changes: output is small and local.
+        Frame f2 = t.frame();
+        f2.buf.set_string(0, 0, "ho", Style.new(), 5);
+        w.len = 0;
+        t.flush();
+        assert_true(w.len > 0 && w.len < first_len, "delta smaller than full");
+    }
+    return done();
+}
