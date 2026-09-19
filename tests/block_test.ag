@@ -1,0 +1,42 @@
+import atelier.widgets.block;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.widget;
+import std.test;
+
+i32 main() {
+    test_start("full border and inner");
+    {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)6, (u16)4);
+        Buffer b = Buffer.empty(a);
+        Block blk = Block.new();
+        blk.render(&a, &b);
+        Cell* tl = b.cell_mut(0, 0);
+        assert_eq_i64(0x250C, (i64)tl.ch, "top-left corner");
+        Cell* br = b.cell_mut(5, 3);
+        assert_eq_i64(0x2518, (i64)br.ch, "bottom-right corner");
+        Cell* mid = b.cell_mut(2, 0);
+        assert_eq_i64(0x2500, (i64)mid.ch, "top edge");
+        Cell* side = b.cell_mut(0, 2);
+        assert_eq_i64(0x2502, (i64)side.ch, "left edge");
+        Rect inner = blk.inner(a);
+        assert_eq_i64(1, (i64)inner.x, "inner x");
+        assert_eq_i64(1, (i64)inner.y, "inner y");
+        assert_eq_i64(4, (i64)inner.width, "inner w");
+        assert_eq_i64(2, (i64)inner.height, "inner h");
+    }
+    test_start("title and partial borders");
+    {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)10, (u16)3);
+        Buffer b = Buffer.empty(a);
+        Block blk = Block.new().borders(BORDER_TOP | BORDER_BOTTOM).title("hi");
+        blk.render(&a, &b);
+        Cell* t = b.cell_mut(1, 0);
+        assert_eq_i64(104, (i64)t.ch, "title first char");
+        Cell* no_left = b.cell_mut(0, 1);
+        assert_eq_i64(0, (i64)no_left.ch, "no left border, middle empty");
+    }
+    return done();
+}

@@ -5,3 +5,4 @@ import atelier.layout;
 import atelier.buffer;
 import atelier.widget;
 import atelier.terminal;
+import atelier.widgets.block;

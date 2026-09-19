@@ -1,0 +1,185 @@
+// Block: bordered container with an optional title.
+//
+// Borders are a bitmask so any subset renders; inner() reports the content
+// area inside them. Titles borrow their text like spans do.
+
+import std.fmt;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.widget;
+
+const u8 BORDER_TOP = 1;
+const u8 BORDER_BOTTOM = 2;
+const u8 BORDER_LEFT = 4;
+const u8 BORDER_RIGHT = 8;
+const u8 BORDER_ALL = 15;
+
+struct Block {
+    u8 borders;
+    Style border_style;
+    Style style;
+    str title;
+    Style title_style;
+    Alignment title_align;
+}
+
+impl Block {
+    Block new() {
+        Block b;
+        b.borders = BORDER_ALL;
+        b.border_style = Style.new();
+        b.style = Style.new();
+        b.title = (str)0;
+        b.title_style = Style.new();
+        b.title_align = Alignment.Left;
+        return b;
+    }
+
+    Block bordered(Block self) {
+        self.borders = BORDER_ALL;
+        return self;
+    }
+
+    Block borders(Block self, u8 borders) {
+        self.borders = borders;
+        return self;
+    }
+
+    Block border_style(Block self, Style style) {
+        self.border_style = style;
+        return self;
+    }
+
+    Block title(Block self, str title) {
+        self.title = title;
+        return self;
+    }
+
+    Block title_style(Block self, Style style) {
+        self.title_style = style;
+        return self;
+    }
+
+    Block title_aligned(Block self, Alignment align) {
+        self.title_align = align;
+        return self;
+    }
+
+    /// Content area inside the borders.
+    Rect inner(&self, Rect area) {
+        i64 x = (i64)area.x;
+        i64 y = (i64)area.y;
+        i64 w = (i64)area.width;
+        i64 h = (i64)area.height;
+        if ((self.borders & BORDER_LEFT) != (u8)0) {
+            x = x + 1;
+            w = w - 1;
+        }
+        if ((self.borders & BORDER_RIGHT) != (u8)0) {
+            w = w - 1;
+        }
+        if ((self.borders & BORDER_TOP) != (u8)0) {
+            y = y + 1;
+            h = h - 1;
+        }
+        if ((self.borders & BORDER_BOTTOM) != (u8)0) {
+            h = h - 1;
+        }
+        if (w < 0) { w = 0; }
+        if (h < 0) { h = 0; }
+        return Rect.new((u16)x, (u16)y, (u16)w, (u16)h);
+    }
+
+    void render_border(&self, Buffer* buf, Rect area) {
+        i64 x0 = (i64)area.x;
+        i64 y0 = (i64)area.y;
+        i64 x1 = x0 + (i64)area.width - 1;
+        i64 y1 = y0 + (i64)area.height - 1;
+        Style st = self.border_style;
+        if ((self.borders & BORDER_TOP) != (u8)0) {
+            for (i64 x = x0; x <= x1; x = x + 1) {
+                buf.set_string(x, y0, "─", st, 1);
+            }
+        }
+        if ((self.borders & BORDER_BOTTOM) != (u8)0) {
+            for (i64 x = x0; x <= x1; x = x + 1) {
+                buf.set_string(x, y1, "─", st, 1);
+            }
+        }
+        if ((self.borders & BORDER_LEFT) != (u8)0) {
+            for (i64 y = y0; y <= y1; y = y + 1) {
+                buf.set_string(x0, y, "│", st, 1);
+            }
+        }
+        if ((self.borders & BORDER_RIGHT) != (u8)0) {
+            for (i64 y = y0; y <= y1; y = y + 1) {
+                buf.set_string(x1, y, "│", st, 1);
+            }
+        }
+        // Corners win over edges.
+        bool tl = (self.borders & (BORDER_TOP | BORDER_LEFT)) == (BORDER_TOP | BORDER_LEFT);
+        bool tr = (self.borders & (BORDER_TOP | BORDER_RIGHT)) == (BORDER_TOP | BORDER_RIGHT);
+        bool bl = (self.borders & (BORDER_BOTTOM | BORDER_LEFT)) == (BORDER_BOTTOM | BORDER_LEFT);
+        bool br = (self.borders & (BORDER_BOTTOM | BORDER_RIGHT)) == (BORDER_BOTTOM | BORDER_RIGHT);
+        if (tl) { buf.set_string(x0, y0, "┌", st, 1); }
+        if (tr) { buf.set_string(x1, y0, "┐", st, 1); }
+        if (bl) { buf.set_string(x0, y1, "└", st, 1); }
+        if (br) { buf.set_string(x1, y1, "┘", st, 1); }
+    }
+
+    void render_title(&self, Buffer* buf, Rect area) {
+        if (self.title == (str)0) {
+            return;
+        }
+        if ((self.borders & BORDER_TOP) == (u8)0) {
+            return;
+        }
+        u8* p = (u8*)self.title;
+        i64 len = cstr_len(p);
+        i64 idx = 0;
+        i64 w = 0;
+        while (idx < len) {
+            u32 cp = utf8_next(p, len, &idx);
+            w = w + (i64)char_width(cp);
+        }
+        i64 max = (i64)area.width - 2;
+        if (max < 0) {
+            return;
+        }
+        if (w > max) {
+            w = max;
+        }
+        i64 x = (i64)area.x + 1;
+        Alignment al = self.title_align;
+        if (align_is_center(al)) {
+            x = (i64)area.x + 1 + (max - w) / 2;
+        } else if (align_is_right(al)) {
+            x = (i64)area.x + 1 + max - w;
+        }
+        buf.set_string(x, (i64)area.y, self.title, self.title_style, max);
+    }
+}
+
+bool align_is_center(Alignment al) {
+    return match al {
+        Center : true,
+        _ : false,
+    };
+}
+
+bool align_is_right(Alignment al) {
+    return match al {
+        Right : true,
+        _ : false,
+    };
+}
+
+impl Widget for Block {
+    void render(*self, Rect* area, Buffer* buf) {
+        buf.set_style(*area, self.style);
+        self.render_border(buf, *area);
+        self.render_title(buf, *area);
+    }
+}
