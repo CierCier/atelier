@@ -1,0 +1,318 @@
+// Constraint layout: split a Rect along one axis by Length, Percentage,
+// Ratio, Fill, Min, and Max constraints.
+//
+// A deterministic single-pass solver (ratatui delegates to the kasuari
+// Cassowary solver; the common cases below resolve identically):
+// fixed Lengths carve first, Percentages take from the full inner size,
+// Ratios and Fills split the remainder by weight, Min/Max clamp. Flooring
+// leftovers follow Flex: Legacy grows the last flexible segment, Start,
+// Center, and End distribute leading/trailing space.
+
+import std.mem.vec;
+import std.ops;
+
+struct Rect {
+    u16 x;
+    u16 y;
+    u16 width;
+    u16 height;
+}
+
+impl Rect {
+    Rect new(u16 x, u16 y, u16 width, u16 height) {
+        Rect r;
+        r.x = x;
+        r.y = y;
+        r.width = width;
+        r.height = height;
+        return r;
+    }
+
+    i64 area(&self) {
+        return (i64)self.width * (i64)self.height;
+    }
+
+    bool is_empty(&self) {
+        return self.width == (u16)0 || self.height == (u16)0;
+    }
+
+    u16 left(&self) {
+        return self.x;
+    }
+
+    u16 right(&self) {
+        return self.x + self.width;
+    }
+
+    u16 top(&self) {
+        return self.y;
+    }
+
+    u16 bottom(&self) {
+        return self.y + self.height;
+    }
+
+    /// Inset by a margin on all sides (clamped at zero size).
+    Rect inner(&self, Margin m) {
+        i64 x = (i64)self.x + (i64)m.horizontal;
+        i64 y = (i64)self.y + (i64)m.vertical;
+        i64 w = (i64)self.width - (i64)m.horizontal * (i64)2;
+        i64 h = (i64)self.height - (i64)m.vertical * (i64)2;
+        if (w < 0) { w = 0; }
+        if (h < 0) { h = 0; }
+        return Rect.new((u16)x, (u16)y, (u16)w, (u16)h);
+    }
+}
+
+struct Margin {
+    u16 horizontal;
+    u16 vertical;
+}
+
+impl Margin {
+    Margin new(u16 horizontal, u16 vertical) {
+        Margin m;
+        m.horizontal = horizontal;
+        m.vertical = vertical;
+        return m;
+    }
+
+    Margin all(u16 v) {
+        return Margin.new(v, v);
+    }
+}
+
+enum Direction {
+    Horizontal;
+    Vertical;
+}
+
+enum Flex {
+    Legacy;
+    Start;
+    Center;
+    End;
+}
+
+enum Constraint {
+    Length(u16);
+    Percentage(u16);
+    Ratio(u32, u32);
+    Fill(u16);
+    Min(u16);
+    Max(u16);
+}
+
+// Discriminant tags keep solver logic in if/else chains: match is an
+// expression, so every arm must yield one type.
+const i64 TAG_LENGTH = 0;
+const i64 TAG_PERCENT = 1;
+const i64 TAG_RATIO = 2;
+const i64 TAG_FILL = 3;
+const i64 TAG_MIN = 4;
+const i64 TAG_MAX = 5;
+
+i64 constraint_tag(Constraint* c) {
+    return match *c {
+        Length(v) : TAG_LENGTH,
+        Percentage(v) : TAG_PERCENT,
+        Ratio(a, b) : TAG_RATIO,
+        Fill(v) : TAG_FILL,
+        Min(v) : TAG_MIN,
+        Max(v) : TAG_MAX,
+    };
+}
+
+/// Length/Min reservation, or -1 when the constraint is not fixed.
+i64 constraint_fixed(Constraint* c) {
+    return match *c {
+        Length(v) : (i64)v,
+        Min(v) : (i64)v,
+        _ : -1,
+    };
+}
+
+/// Percentage value, or -1 when not a percentage.
+i64 constraint_percent(Constraint* c) {
+    return match *c {
+        Percentage(v) : (i64)v,
+        _ : -1,
+    };
+}
+
+i64 ratio_weight(u32 a, u32 b) {
+    if (b == (u32)0) {
+        return (i64)a;
+    }
+    return (i64)a * (i64)100 / (i64)b;
+}
+
+/// Remainder weight: scaled ratio, fill count, 1 for Min/Max, else 0.
+i64 constraint_weight(Constraint* c) {
+    return match *c {
+        Ratio(a, b) : ratio_weight(a, b),
+        Fill(v) : (i64)v,
+        Min(v) : 1,
+        Max(v) : 1,
+        _ : 0,
+    };
+}
+
+/// Max cap, or -1 when not a Max constraint.
+i64 constraint_max(Constraint* c) {
+    return match *c {
+        Max(v) : (i64)v,
+        _ : -1,
+    };
+}
+
+struct Layout {
+    Direction dir;
+    Vec<Constraint> constraints;
+    Flex flex;
+    Margin margin;
+}
+
+impl Layout {
+    Layout new(Direction dir, Vec<Constraint> constraints) {
+        Layout l;
+        l.dir = dir;
+        l.constraints = move constraints;
+        l.flex = Flex.Legacy;
+        l.margin = Margin.all((u16)0);
+        return move l;
+    }
+
+    Layout flex(Layout self, Flex flex) {
+        self.flex = flex;
+        return move self;
+    }
+
+    Layout margin(Layout self, u16 m) {
+        self.margin = Margin.all(m);
+        return move self;
+    }
+
+    /// Split `area` into one Rect per constraint, in order.
+    Vec<Rect> split(&self, Rect area) {
+        Rect inner = area.inner(self.margin);
+        i64 total = 0;
+        i64 off = 0;
+        Direction d = self.dir;
+        bool horiz = true;
+        match d {
+            Horizontal : { horiz = true; },
+            Vertical : { horiz = false; },
+        }
+        if (horiz) {
+            total = (i64)inner.width;
+            off = (i64)inner.x;
+        } else {
+            total = (i64)inner.height;
+            off = (i64)inner.y;
+        }
+        i64 n = self.constraints.len();
+        Vec<i64> sizes = Vec<i64>.new();
+        for (i64 i = 0; i < n; i = i + 1) {
+            sizes.push(0);
+        }
+        // Pass 1: fixed lengths and minimum reservations.
+        i64 used = 0;
+        for (i64 i = 0; i < n; i = i + 1) {
+            Constraint* c = self.constraints.get_ptr(i);
+            i64 f = constraint_fixed(c);
+            if (f >= 0) {
+                i64 s = f;
+                if (s > total - used) { s = total - used; }
+                if (s < 0) { s = 0; }
+                sizes.set(i, s);
+                used = used + s;
+            }
+        }
+        // Pass 2: percentages of the full inner size.
+        for (i64 i = 0; i < n; i = i + 1) {
+            Constraint* c = self.constraints.get_ptr(i);
+            i64 p = constraint_percent(c);
+            if (p >= 0) {
+                i64 s = total * p / (i64)100;
+                if (s > total - used) { s = total - used; }
+                if (s < 0) { s = 0; }
+                sizes.set(i, s);
+                used = used + s;
+            }
+        }
+        // Pass 3: ratios and fills split the remainder by weight.
+        i64 rem = total - used;
+        if (rem < 0) { rem = 0; }
+        i64 wsum = 0;
+        for (i64 i = 0; i < n; i = i + 1) {
+            Constraint* c = self.constraints.get_ptr(i);
+            wsum = wsum + constraint_weight(c);
+        }
+        if (wsum > 0) {
+            for (i64 i = 0; i < n; i = i + 1) {
+                Constraint* c = self.constraints.get_ptr(i);
+                i64 w = constraint_weight(c);
+                if (w > 0) {
+                    i64 base = 0;
+                    if (constraint_tag(c) == TAG_MIN) {
+                        base = sizes.get(i);
+                    }
+                    i64 s = base + rem * w / wsum;
+                    i64 cap = constraint_max(c);
+                    if (cap >= 0 && s > cap) {
+                        s = cap;
+                    }
+                    sizes.set(i, s);
+                    used = used + (s - base);
+                }
+            }
+        }
+        // Leftover from flooring/clamping follows Flex.
+        rem = total - used;
+        i64 lead = 0;
+        Flex fx = self.flex;
+        if (fx == Flex.Legacy) {
+            if (rem > 0) {
+                // Grow the last flexible segment, else the last one.
+                i64 last = n - 1;
+                for (i64 i = n - 1; i >= 0; i = i - 1) {
+                    Constraint* c = self.constraints.get_ptr(i);
+                    if (constraint_tag(c) >= TAG_RATIO) {
+                        last = i;
+                        break;
+                    }
+                }
+                if (last >= 0) {
+                    sizes.set(last, sizes.get(last) + rem);
+                }
+            }
+        } else if (fx == Flex.Center) {
+            if (rem > 0) {
+                lead = rem / 2;
+            }
+        } else if (fx == Flex.End) {
+            if (rem > 0) {
+                lead = rem;
+            }
+        }
+        // Lay out segments in order.
+        Vec<Rect> out = Vec<Rect>.new();
+        i64 pos = off + lead;
+        for (i64 i = 0; i < n; i = i + 1) {
+            i64 s = sizes.get(i);
+            if (s < 0) { s = 0; }
+            if (pos + s > off + total) { s = off + total - pos; }
+            if (s < 0) { s = 0; }
+            Rect r;
+            if (horiz) {
+                r = Rect.new((u16)pos, inner.y, (u16)s, inner.height);
+            } else {
+                r = Rect.new(inner.x, (u16)pos, inner.width, (u16)s);
+            }
+            out.push(r);
+            pos = pos + s;
+        }
+        return out;
+    }
+}

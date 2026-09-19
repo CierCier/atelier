@@ -1,0 +1,44 @@
+import atelier.layout;
+import std.test;
+
+Vec<Constraint> cons2(Constraint a, Constraint b) {
+    Vec<Constraint> v = Vec<Constraint>.new();
+    v.push(a);
+    v.push(b);
+    return move v;
+}
+
+i32 main() {
+    test_start("length split");
+    {
+        Vec<Constraint> cs = cons2(Constraint.Length((u16)10), Constraint.Fill((u16)1));
+        Layout l = Layout.new(Direction.Horizontal, move cs);
+        Vec<Rect> rs = l.split(Rect.new((u16)0, (u16)0, (u16)30, (u16)5));
+        assert_eq_i64(2, rs.len(), "two rects");
+        Rect* a = rs.get_ptr((i64)0);
+        Rect* b = rs.get_ptr((i64)1);
+        assert_eq_i64(10, (i64)a.width, "fixed length");
+        assert_eq_i64(20, (i64)b.width, "fill takes rest");
+        assert_eq_i64(10, (i64)b.x, "fill offset");
+    }
+    test_start("percentage and vertical");
+    {
+        Vec<Constraint> cs = cons2(Constraint.Percentage((u16)50), Constraint.Percentage((u16)50));
+        Layout l = Layout.new(Direction.Vertical, move cs);
+        Vec<Rect> rs = l.split(Rect.new((u16)0, (u16)0, (u16)10, (u16)9));
+        Rect* a = rs.get_ptr((i64)0);
+        Rect* b = rs.get_ptr((i64)1);
+        assert_eq_i64(4, (i64)a.height, "half of 9 floors to 4");
+        assert_eq_i64(5, (i64)b.height, "legacy grows last");
+        assert_eq_i64(4, (i64)b.y, "second offset");
+    }
+    test_start("center flex");
+    {
+        Vec<Constraint> cs = cons2(Constraint.Length((u16)10), Constraint.Length((u16)10));
+        Layout l = Layout.new(Direction.Horizontal, move cs).flex(Flex.Center);
+        Vec<Rect> rs = l.split(Rect.new((u16)0, (u16)0, (u16)30, (u16)5));
+        Rect* a = rs.get_ptr((i64)0);
+        assert_eq_i64(5, (i64)a.x, "centered lead");
+    }
+    return done();
+}

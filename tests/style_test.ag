@@ -1,0 +1,15 @@
+import atelier.style;
+import std.test;
+
+i32 main() {
+    test_start("style builders and patch");
+    Style s = Style.new().fg(Color.Red).bold();
+    Style t = Style.new().bg(Color.Blue);
+    Style u = s.patch(t);
+    Color red = Color.Red;
+    Color blue = Color.Blue;
+    assert_true(u.fg == red, "patch keeps fg");
+    assert_true(u.bg == blue, "patch takes bg");
+    assert_true((u.add_mod & MOD_BOLD) != (u16)0, "patch keeps mods");
+    return done();
+}

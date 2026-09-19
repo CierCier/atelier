@@ -1,0 +1,230 @@
+// Text primitives: styled spans, lines, and multi-line text, plus the
+// Unicode width table and UTF-8 decoder the buffer relies on.
+//
+// Spans borrow their text (`str` is a non-owning view): the caller keeps the
+// source alive while the span renders. `Text` owns backing Strings that its
+// lines borrow — Vec growth moves String headers, never their buffers, so
+// those borrows stay valid.
+
+import std.mem.vec;
+import std.string;
+import atelier.style;
+
+enum Alignment {
+    Left;
+    Center;
+    Right;
+}
+
+/// Decode one codepoint at p[idx..len], advancing idx. U+FFFD on bad input.
+u32 utf8_next(u8* p, i64 len, i64* idx) {
+    i64 i = *idx;
+    if (i >= len) {
+        return (u32)0xFFFD;
+    }
+    u8 b = p[i];
+    if (b < (u8)0x80) {
+        *idx = i + 1;
+        return (u32)b;
+    }
+    if (b >= (u8)0xC2 && b < (u8)0xE0 && i + 1 < len) {
+        u8 c = p[i + 1];
+        if (c >= (u8)0x80 && c < (u8)0xC0) {
+            *idx = i + 2;
+            return ((u32)b & (u32)0x1F) << (u32)6 | ((u32)c & (u32)0x3F);
+        }
+    } else if (b >= (u8)0xE0 && b < (u8)0xF0 && i + 2 < len) {
+        u8 c = p[i + 1];
+        u8 d = p[i + 2];
+        if (c >= (u8)0x80 && c < (u8)0xC0 && d >= (u8)0x80 && d < (u8)0xC0) {
+            *idx = i + 3;
+            return ((u32)b & (u32)0x0F) << (u32)12
+                | ((u32)c & (u32)0x3F) << (u32)6
+                | ((u32)d & (u32)0x3F);
+        }
+    } else if (b >= (u8)0xF0 && b < (u8)0xF5 && i + 3 < len) {
+        u8 c = p[i + 1];
+        u8 d = p[i + 2];
+        u8 e = p[i + 3];
+        if (c >= (u8)0x80 && c < (u8)0xC0
+            && d >= (u8)0x80 && d < (u8)0xC0
+            && e >= (u8)0x80 && e < (u8)0xC0) {
+            *idx = i + 4;
+            return ((u32)b & (u32)0x07) << (u32)18
+                | ((u32)c & (u32)0x3F) << (u32)12
+                | ((u32)d & (u32)0x3F) << (u32)6
+                | ((u32)e & (u32)0x3F);
+        }
+    }
+    *idx = i + 1;
+    return (u32)0xFFFD;
+}
+
+bool cp_in(u32 cp, u32 lo, u32 hi) {
+    return cp >= lo && cp <= hi;
+}
+
+/// Terminal cell width of a codepoint: 0 for controls and combining marks,
+/// 2 for East-Asian wide/fullwidth, 1 otherwise (western wcwidth behavior).
+u16 char_width(u32 cp) {
+    if (cp < (u32)32 || (cp >= (u32)0x7F && cp < (u32)0xA0)) {
+        return (u16)0;
+    }
+    // Combining marks (zero width).
+    if (cp_in(cp, 0x0300, 0x036F) || cp_in(cp, 0x0483, 0x0489)
+        || cp_in(cp, 0x0591, 0x05BD) || cp == 0x05BF
+        || cp_in(cp, 0x05C1, 0x05C2) || cp_in(cp, 0x05C4, 0x05C5)
+        || cp == 0x05C7 || cp_in(cp, 0x0610, 0x061A)
+        || cp_in(cp, 0x064B, 0x065F) || cp == 0x0670
+        || cp_in(cp, 0x06D6, 0x06ED) || cp == 0x0711
+        || cp_in(cp, 0x0730, 0x074A) || cp_in(cp, 0x07A6, 0x07B0)
+        || cp_in(cp, 0x0900, 0x0903) || cp_in(cp, 0x093A, 0x094F)
+        || cp_in(cp, 0x0955, 0x0957) || cp_in(cp, 0x0962, 0x0963)
+        || cp == 0x0E31 || cp_in(cp, 0x0E34, 0x0E3A)
+        || cp_in(cp, 0x0E47, 0x0E4E) || cp_in(cp, 0x1AB0, 0x1AFF)
+        || cp_in(cp, 0x1DC0, 0x1DFF) || cp_in(cp, 0x20D0, 0x20FF)
+        || cp_in(cp, 0xFE00, 0xFE0F) || cp_in(cp, 0xFE20, 0xFE2F)) {
+        return (u16)0;
+    }
+    // Wide / fullwidth (two cells).
+    if (cp_in(cp, 0x1100, 0x115F) || cp == 0x231A || cp == 0x231B
+        || cp == 0x2329 || cp == 0x232A
+        || cp_in(cp, 0x2E80, 0x303E) || cp_in(cp, 0x3040, 0xA4CF)
+        || cp_in(cp, 0xAC00, 0xD7A3) || cp_in(cp, 0xF900, 0xFAFF)
+        || cp_in(cp, 0xFE30, 0xFE4F) || cp_in(cp, 0xFF00, 0xFF60)
+        || cp_in(cp, 0xFFE0, 0xFFE6) || cp_in(cp, 0x20000, 0x2FFFD)
+        || cp_in(cp, 0x30000, 0x3FFFD)) {
+        // 0x303F (ideographic half fill) is narrow inside 3040..A4CF.
+        if (cp == 0x303F) {
+            return (u16)1;
+        }
+        return (u16)2;
+    }
+    return (u16)1;
+}
+
+struct Span {
+    str text;
+    Style style;
+}
+
+impl Span {
+    Span new(str text) {
+        Span s;
+        s.text = text;
+        s.style = Style.new();
+        return s;
+    }
+
+    Span styled(str text, Style style) {
+        Span s;
+        s.text = text;
+        s.style = style;
+        return s;
+    }
+
+    /// Display width in cells (sum of codepoint widths).
+    i64 width(&self) {
+        if (self.text == (str)0) {
+            return 0;
+        }
+        u8* p = (u8*)self.text;
+        i64 len = cstr_len(p);
+        i64 idx = 0;
+        i64 w = 0;
+        while (idx < len) {
+            u32 cp = utf8_next(p, len, &idx);
+            w = w + (i64)char_width(cp);
+        }
+        return w;
+    }
+}
+
+struct Line {
+    Vec<Span> spans;
+    Style style;
+    Alignment align;
+}
+
+impl Line {
+    Line from(str text) {
+        Line l;
+        l.spans = Vec<Span>.new();
+        l.spans.push(Span.new(text));
+        l.style = Style.new();
+        l.align = Alignment.Left;
+        return move l;
+    }
+
+    Line styled(str text, Style style) {
+        Line l = Line.from(text);
+        l.style = style;
+        return move l;
+    }
+
+    Line aligned(Line self, Alignment align) {
+        self.align = align;
+        return move self;
+    }
+
+    i64 width(&self) {
+        i64 w = 0;
+        for (i64 i = 0; i < self.spans.len(); i = i + 1) {
+            Span* s = self.spans.get_ptr(i);
+            w = w + s.width();
+        }
+        return w;
+    }
+
+    i64 span_count(&self) {
+        return self.spans.len();
+    }
+
+    Span* span_at(&self, i64 i) {
+        return self.spans.get_ptr(i);
+    }
+
+}
+
+struct Text {
+    Vec<Line> lines;
+    Vec<String> owned;
+    Style style;
+}
+
+impl Text {
+    /// Split on '\n'; lines borrow the owned backing copies.
+    Text from(str text) {
+        Text t;
+        t.lines = Vec<Line>.new();
+        t.owned = Vec<String>.new();
+        t.style = Style.new();
+        if (text == (str)0) {
+            return move t;
+        }
+        String src = String.from_str(text);
+        i64 start = 0;
+        i64 i = 0;
+        while (i <= src.len()) {
+            if (i == src.len() || src[i] == (u8)10) {
+                String piece = src.substr(start, i - start);
+                t.owned.push(move piece);
+                String* back = t.owned.get_ptr(t.owned.len() - 1);
+                t.lines.push(Line.from(back.to_str()));
+                start = i + 1;
+            }
+            i = i + 1;
+        }
+        src.drop();
+        return move t;
+    }
+
+    i64 height(&self) {
+        return self.lines.len();
+    }
+
+    Line* line_at(&self, i64 i) {
+        return self.lines.get_ptr(i);
+    }
+
+}

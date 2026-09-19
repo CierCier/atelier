@@ -1,0 +1,11 @@
+import atelier.text;
+import std.test;
+
+i32 main() {
+    test_start("span widths");
+    Span s = Span.new("hello");
+    assert_eq_i64(5, s.width(), "ascii width");
+    Span w = Span.new("éあ");
+    assert_eq_i64(3, w.width(), "mixed width");
+    return done();
+}

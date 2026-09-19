@@ -1,0 +1,149 @@
+// Style primitives: colors, text modifiers, and composable styles.
+//
+// `Color.Reset` doubles as "unset": at emit time both mean the terminal
+// default (SGR 39/49), so there is no separate Option layer on the hot path.
+
+import std.ops;
+
+enum Color {
+    Reset;
+    Black;
+    Red;
+    Green;
+    Yellow;
+    Blue;
+    Magenta;
+    Cyan;
+    White;
+    BrightBlack;
+    BrightRed;
+    BrightGreen;
+    BrightYellow;
+    BrightBlue;
+    BrightMagenta;
+    BrightCyan;
+    BrightWhite;
+    Indexed(u8);
+    Rgb(u8, u8, u8);
+}
+
+// Modifier bitflags (u16).
+const u16 MOD_BOLD = 1;
+const u16 MOD_DIM = 2;
+const u16 MOD_ITALIC = 4;
+const u16 MOD_UNDERLINED = 8;
+const u16 MOD_SLOW_BLINK = 16;
+const u16 MOD_RAPID_BLINK = 32;
+const u16 MOD_REVERSED = 64;
+const u16 MOD_HIDDEN = 128;
+const u16 MOD_CROSSED_OUT = 256;
+
+impl Eq<Color> for Color {
+    bool __eq(&self, &Color other) {
+        return match *self {
+            Reset : match *other { Reset : true, _ : false },
+            Black : match *other { Black : true, _ : false },
+            Red : match *other { Red : true, _ : false },
+            Green : match *other { Green : true, _ : false },
+            Yellow : match *other { Yellow : true, _ : false },
+            Blue : match *other { Blue : true, _ : false },
+            Magenta : match *other { Magenta : true, _ : false },
+            Cyan : match *other { Cyan : true, _ : false },
+            White : match *other { White : true, _ : false },
+            BrightBlack : match *other { BrightBlack : true, _ : false },
+            BrightRed : match *other { BrightRed : true, _ : false },
+            BrightGreen : match *other { BrightGreen : true, _ : false },
+            BrightYellow : match *other { BrightYellow : true, _ : false },
+            BrightBlue : match *other { BrightBlue : true, _ : false },
+            BrightMagenta : match *other { BrightMagenta : true, _ : false },
+            BrightCyan : match *other { BrightCyan : true, _ : false },
+            BrightWhite : match *other { BrightWhite : true, _ : false },
+            Indexed(a) : match *other { Indexed(b) : a == b, _ : false },
+            Rgb(r1, g1, b1) : match *other {
+                Rgb(r2, g2, b2) : r1 == r2 && g1 == g2 && b1 == b2,
+                _ : false,
+            },
+        };
+    }
+}
+
+impl Ne<Color> for Color {
+    bool __ne(&self, &Color other) {
+        return !self.__eq(other);
+    }
+}
+
+struct Style {
+    Color fg;
+    Color bg;
+    u16 add_mod;
+    u16 sub_mod;
+}
+
+impl Style {
+    Style new() {
+        Style s;
+        s.fg = Color.Reset;
+        s.bg = Color.Reset;
+        s.add_mod = (u16)0;
+        s.sub_mod = (u16)0;
+        return s;
+    }
+
+    Style fg(self, Color c) {
+        self.fg = c;
+        return self;
+    }
+
+    Style bg(self, Color c) {
+        self.bg = c;
+        return self;
+    }
+
+    Style add_modifier(self, u16 m) {
+        self.add_mod = self.add_mod | m;
+        self.sub_mod = self.sub_mod & ~m;
+        return self;
+    }
+
+    Style remove_modifier(self, u16 m) {
+        self.sub_mod = self.sub_mod | m;
+        self.add_mod = self.add_mod & ~m;
+        return self;
+    }
+
+    Style bold(self) {
+        return self.add_modifier(MOD_BOLD);
+    }
+
+    Style dim(self) {
+        return self.add_modifier(MOD_DIM);
+    }
+
+    Style italic(self) {
+        return self.add_modifier(MOD_ITALIC);
+    }
+
+    Style underlined(self) {
+        return self.add_modifier(MOD_UNDERLINED);
+    }
+
+    Style reversed(self) {
+        return self.add_modifier(MOD_REVERSED);
+    }
+
+    /// Overlay `other` on top of self: set colors win, modifiers merge.
+    /// (Colors compare against bound locals: temporaries cannot be borrowed.)
+    Style patch(self, Style other) {
+        Color unset = Color.Reset;
+        if (other.fg != unset) {
+            self.fg = other.fg;
+        }
+        if (other.bg != unset) {
+            self.bg = other.bg;
+        }
+        self.add_mod = (self.add_mod | other.add_mod) & ~other.sub_mod;
+        self.sub_mod = (self.sub_mod | other.sub_mod) & ~other.add_mod;
+        return self;
+    }
+}
