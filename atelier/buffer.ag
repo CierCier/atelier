@@ -1,0 +1,227 @@
+// Retained rendering buffer: a cell grid widgets draw into, diffed
+// against the previous frame to emit minimal terminal updates.
+//
+// Cells store resolved style (fg/bg/mod bits) plus one codepoint; 0 is
+// empty and renders as a space. Combining marks are skipped (not merged);
+// wide codepoints advance two cells, leaving the trailer empty.
+
+import std.mem.vec;
+import std.ops;
+import std.fmt;
+import atelier.style;
+import atelier.text;
+import atelier.layout;
+
+struct Cell {
+    u32 ch;
+    Color fg;
+    Color bg;
+    u16 mods;
+}
+
+impl Cell {
+    Cell empty() {
+        Cell c;
+        c.ch = (u32)0;
+        c.fg = Color.Reset;
+        c.bg = Color.Reset;
+        c.mods = (u16)0;
+        return c;
+    }
+}
+
+bool cell_eq(Cell* a, Cell* b) {
+    if (a.ch != b.ch) {
+        return false;
+    }
+    if (a.fg != b.fg) {
+        return false;
+    }
+    if (a.bg != b.bg) {
+        return false;
+    }
+    return a.mods == b.mods;
+}
+
+/// Apply a style patch to a resolved cell.
+void cell_apply(Cell* c, Style style) {
+    Color unset = Color.Reset;
+    if (style.fg != unset) {
+        c.fg = style.fg;
+    }
+    if (style.bg != unset) {
+        c.bg = style.bg;
+    }
+    c.mods = (c.mods | style.add_mod) & ~style.sub_mod;
+}
+
+struct CellUpdate {
+    u16 x;
+    u16 y;
+    Cell cell;
+}
+
+/// Leading offset for aligned content of width w in max_width cells.
+i64 align_offset(Alignment al, i64 max_width, i64 w) {
+    return match al {
+        Center : (max_width - w) / 2,
+        Right : max_width - w,
+        _ : 0,
+    };
+}
+
+struct Buffer {
+    Rect area;
+    Vec<Cell> cells;
+}
+
+impl Buffer {
+    Buffer empty(Rect area) {
+        Buffer b;
+        b.area = area;
+        b.cells = Vec<Cell>.new();
+        i64 n = area.area();
+        for (i64 i = 0; i < n; i = i + 1) {
+            b.cells.push(Cell.empty());
+        }
+        return move b;
+    }
+
+    i64 index_of(&self, i64 x, i64 y) {
+        return (y - (i64)self.area.y) * (i64)self.area.width + (x - (i64)self.area.x);
+    }
+
+    bool in_bounds(&self, i64 x, i64 y) {
+        return x >= (i64)self.area.x && y >= (i64)self.area.y
+            && x < (i64)self.area.x + (i64)self.area.width
+            && y < (i64)self.area.y + (i64)self.area.height;
+    }
+
+    Cell* cell_mut(&self, i64 x, i64 y) {
+        if (!self.in_bounds(x, y)) {
+            return (Cell*)0;
+        }
+        return self.cells.get_ptr(self.index_of(x, y));
+    }
+
+    /// Write one codepoint with a resolved style; clips out of bounds.
+    void set_cell(&self, i64 x, i64 y, u32 ch, Style style) {
+        Cell* c = self.cell_mut(x, y);
+        if (c == (Cell*)0) {
+            return;
+        }
+        c.ch = ch;
+        cell_apply(c, style);
+    }
+
+    /// Write text left to right, width-aware. Returns the x after the last
+    /// written cell. Zero-width codepoints are skipped; wide ones advance
+    /// two cells; writing stops at max_width cells.
+    i64 set_string(&self, i64 x, i64 y, str text, Style style, i64 max_width) {
+        if (text == (str)0 || max_width <= 0) {
+            return x;
+        }
+        u8* p = (u8*)text;
+        i64 len = cstr_len(p);
+        i64 idx = 0;
+        i64 used = 0;
+        while (idx < len && used < max_width) {
+            u32 cp = utf8_next(p, len, &idx);
+            u16 w = char_width(cp);
+            if (w == (u16)0) {
+                continue;
+            }
+            if (used + (i64)w > max_width) {
+                break;
+            }
+            self.set_cell(x + used, y, cp, style);
+            used = used + (i64)w;
+        }
+        return x + used;
+    }
+
+    /// Fill `area` with a style patch.
+    void set_style(&self, Rect area, Style style) {
+        for (i64 y = (i64)area.y; y < (i64)area.y + (i64)area.height; y = y + 1) {
+            for (i64 x = (i64)area.x; x < (i64)area.x + (i64)area.width; x = x + 1) {
+                Cell* c = self.cell_mut(x, y);
+                if (c != (Cell*)0) {
+                    cell_apply(c, style);
+                }
+            }
+        }
+    }
+
+    i64 set_line(&self, i64 x, i64 y, Line* line, i64 max_width) {
+        i64 w = line.width();
+        if (w > max_width) {
+            w = max_width;
+        }
+        i64 start = x + align_offset(line.align, max_width, w);
+        i64 pos = start;
+        for (i64 i = 0; i < line.span_count(); i = i + 1) {
+            Span* s = line.span_at(i);
+            Style st = line.style.patch(s.style);
+            pos = self.set_string(pos, y, s.text, st, start + max_width - pos);
+        }
+        if (pos < start) {
+            pos = start;
+        }
+        return pos;
+    }
+
+    /// Reset every cell to empty.
+    void reset(&mut self) {
+        for (i64 i = 0; i < self.cells.len(); i = i + 1) {
+            Cell* c = self.cells.get_ptr(i);
+            c.ch = (u32)0;
+            Color reset = Color.Reset;
+            c.fg = reset;
+            c.bg = reset;
+            c.mods = (u16)0;
+        }
+    }
+
+    /// Resize the grid, discarding contents.
+    void resize(&mut self, Rect area) {
+        self.area = area;
+        self.cells.clear();
+        i64 n = area.area();
+        for (i64 i = 0; i < n; i = i + 1) {
+            self.cells.push(Cell.empty());
+        }
+    }
+
+    /// Changed cells vs the previous frame, in row-major order.
+    Vec<CellUpdate> diff(&self, Buffer* prev) {
+        Vec<CellUpdate> out = Vec<CellUpdate>.new();
+        if (prev.cells.len() != self.cells.len()) {
+            // Different geometry: report everything.
+            for (i64 i = 0; i < self.cells.len(); i = i + 1) {
+                Cell* c = self.cells.get_ptr(i);
+                i64 x = (i64)self.area.x + i % (i64)self.area.width;
+                i64 y = (i64)self.area.y + i / (i64)self.area.width;
+                CellUpdate u;
+                u.x = (u16)x;
+                u.y = (u16)y;
+                u.cell = *c;
+                out.push(u);
+            }
+            return out;
+        }
+        for (i64 i = 0; i < self.cells.len(); i = i + 1) {
+            Cell* c = self.cells.get_ptr(i);
+            Cell* old = prev.cells.get_ptr(i);
+            if (!cell_eq(c, old)) {
+                i64 x = (i64)self.area.x + i % (i64)self.area.width;
+                i64 y = (i64)self.area.y + i / (i64)self.area.width;
+                CellUpdate u;
+                u.x = (u16)x;
+                u.y = (u16)y;
+                u.cell = *c;
+                out.push(u);
+            }
+        }
+        return out;
+    }
+}

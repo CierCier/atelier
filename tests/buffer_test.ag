@@ -1,0 +1,51 @@
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import std.test;
+
+i32 main() {
+    test_start("set string and diff");
+    {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)10, (u16)2);
+        Buffer prev = Buffer.empty(a);
+        Buffer next = Buffer.empty(a);
+        next.set_string(0, 0, "hi", Style.new(), 10);
+        Vec<CellUpdate> d = next.diff(&prev);
+        assert_eq_i64(2, d.len(), "two cells changed");
+        CellUpdate* u0 = d.get_ptr((i64)0);
+        assert_eq_i64(0, (i64)u0.x, "first at x=0");
+        assert_eq_i64(104, (i64)u0.cell.ch, "h codepoint");
+        CellUpdate* u1 = d.get_ptr((i64)1);
+        assert_eq_i64(105, (i64)u1.cell.ch, "i codepoint");
+        Vec<CellUpdate> d2 = next.diff(&next);
+        assert_eq_i64(0, d2.len(), "identical buffers diff empty");
+    }
+    test_start("styled cells and reset");
+    {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)5, (u16)1);
+        Buffer b = Buffer.empty(a);
+        Style st = Style.new().fg(Color.Red).bold();
+        b.set_string(0, 0, "x", st, 5);
+        Cell* c = b.cell_mut(0, 0);
+        Color red = Color.Red;
+        assert_true(c.fg == red, "fg applied");
+        assert_true((c.mods & MOD_BOLD) != (u16)0, "bold applied");
+        b.reset();
+        assert_eq_i64(0, (i64)c.ch, "reset clears");
+    }
+    test_start("clipping and wide chars");
+    {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)4, (u16)1);
+        Buffer b = Buffer.empty(a);
+        // あ is width 2; only 2 fit in... write at x=3: clipped.
+        i64 end = b.set_string(3, 0, "あ", Style.new(), 10);
+        assert_eq_i64(5, end, "wide char advances 2");
+        Cell* c = b.cell_mut(3, 0);
+        assert_eq_i64(0x3042, (i64)c.ch, "wide char stored");
+        // Out-of-bounds writes are dropped silently.
+        b.set_string(99, 99, "z", Style.new(), 10);
+        assert_true(b.cell_mut(99, 99) == (Cell*)0, "oob reads null");
+    }
+    return done();
+}
