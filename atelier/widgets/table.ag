@@ -1,0 +1,288 @@
+// Table: fixed-height rows with column alignment, header styling, selection,
+// and an external scroll/selection state.
+
+import std.mem.vec;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+
+struct TableCell {
+    String text;
+    Style style;
+}
+
+impl TableCell {
+    TableCell new(str text) {
+        TableCell c;
+        c.text = String.from_str(text);
+        c.style = Style.new();
+        return move c;
+    }
+
+    TableCell styled(str text, Style style) {
+        TableCell c = TableCell.new(text);
+        c.style = style;
+        return move c;
+    }
+}
+
+struct TableRow {
+    Vec<TableCell> cells;
+    Style style;
+}
+
+impl TableRow {
+    TableRow new(Vec<TableCell> cells) {
+        TableRow r;
+        r.cells = move cells;
+        r.style = Style.new();
+        return move r;
+    }
+
+    TableRow style(TableRow self, Style style) {
+        self.style = style;
+        return self;
+    }
+}
+
+struct TableState {
+    i64 selected;
+    i64 offset;
+}
+
+impl TableState {
+    TableState new() {
+        TableState s;
+        s.selected = -1;
+        s.offset = 0;
+        return s;
+    }
+
+    void select(&mut self, i64 index) {
+        self.selected = index;
+    }
+
+    void next(&mut self, i64 count) {
+        if (count <= 0) {
+            self.selected = -1;
+            return;
+        }
+        if (self.selected < 0) {
+            self.selected = 0;
+        } else {
+            self.selected = self.selected + 1;
+            if (self.selected >= count) {
+                self.selected = 0;
+            }
+        }
+    }
+}
+
+struct Table {
+    Vec<TableRow> rows;
+    UpdateInterval cadence;
+    Vec<u16> widths;
+    Style style;
+    Style header_style;
+    Style selected_style;
+    str separator;
+    u16 header_rows;
+    Block block;
+    bool has_block;
+}
+
+impl Table {
+    Table new(Vec<TableRow> rows) {
+        Table t;
+        t.rows = move rows;
+        t.cadence = UpdateInterval.new(0);
+        t.widths = Vec<u16>.new();
+        t.style = Style.new();
+        t.header_style = Style.new().bold();
+        t.selected_style = Style.new().reversed();
+        t.separator = "│";
+        t.header_rows = (u16)0;
+        t.block = Block.new();
+        t.has_block = false;
+        return move t;
+    }
+
+    Table widths(Table self, Vec<u16> widths) {
+        self.widths = move widths;
+        return move self;
+    }
+
+    Table header_rows(Table self, u16 count) {
+        self.header_rows = count;
+        return move self;
+    }
+
+    Table style(Table self, Style style) {
+        self.style = style;
+        return move self;
+    }
+
+    Table header_style(Table self, Style style) {
+        self.header_style = style;
+        return move self;
+    }
+
+    Table selected_style(Table self, Style style) {
+        self.selected_style = style;
+        return move self;
+    }
+
+    Table separator(Table self, str separator) {
+        self.separator = separator;
+        return move self;
+    }
+
+    Table block(Table self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return move self;
+    }
+
+    Table update_interval(Table self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return move self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+}
+
+impl StatefulWidget for Table {
+    type State = TableState;
+
+    void render(&self, &Rect area, &mut Buffer buf, &mut TableState state) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+        i64 row_count = self.rows.len();
+        if (row_count <= 0) {
+            state.selected = -1;
+            state.offset = 0;
+            return;
+        }
+        if (state.selected >= row_count) {
+            state.selected = row_count - 1;
+        }
+        if (state.selected < -1) {
+            state.selected = -1;
+        }
+        i64 height = (i64)inner.height;
+        if (state.selected >= 0) {
+            if (state.selected < state.offset) { state.offset = state.selected; }
+            if (state.selected >= state.offset + height) { state.offset = state.selected - height + 1; }
+        }
+        if (state.offset < 0) { state.offset = 0; }
+        i64 max_offset = row_count - height;
+        if (max_offset < 0) { max_offset = 0; }
+        if (state.offset > max_offset) { state.offset = max_offset; }
+
+        i64 columns = table_column_count(&self.rows);
+        i64 separator_width = text_width(self.separator);
+        if (separator_width < 1) { separator_width = 1; }
+        Vec<u16> resolved = table_resolve_widths(&self.rows, &self.widths, columns, (i64)inner.width, separator_width);
+        i64 y = (i64)inner.y;
+        for (i64 row_idx = state.offset; row_idx < row_count && y < (i64)inner.y + height; row_idx = row_idx + 1) {
+            TableRow* row = self.rows.get_ptr(row_idx);
+            Style row_style = self.style.patch(row.style);
+            if (row_idx < (i64)self.header_rows) { row_style = row_style.patch(self.header_style); }
+            if (row_idx == state.selected) { row_style = row_style.patch(self.selected_style); }
+            i64 x = (i64)inner.x;
+            for (i64 col = 0; col < columns; col = col + 1) {
+                i64 width = (i64)resolved.get(col);
+                if (width <= 0) { continue; }
+                if (col < row.cells.len()) {
+                    TableCell* cell = row.cells.get_ptr(col);
+                    Style cell_style = row_style.patch(cell.style);
+                    buf.set_string(x, y, cell.text.to_str(), cell_style, width);
+                }
+                x = x + width;
+                if (col + 1 < columns && x < (i64)inner.x + (i64)inner.width) {
+                    buf.set_string(x, y, self.separator, row_style, separator_width);
+                    x = x + separator_width;
+                }
+            }
+            y = y + 1;
+        }
+    }
+}
+
+i64 table_column_count(&Vec<TableRow> rows) {
+    i64 count = 0;
+    for (i64 i = 0; i < rows.len(); i = i + 1) {
+        TableRow* row = rows.get_ptr(i);
+        if (row.cells.len() > count) { count = row.cells.len(); }
+    }
+    return count;
+}
+
+Vec<u16> table_resolve_widths(&Vec<TableRow> rows, &Vec<u16> requested, i64 columns, i64 available, i64 separator_width) {
+    Vec<u16> out = Vec<u16>.new();
+    i64 separators = 0;
+    if (columns > 1) { separators = (columns - 1) * separator_width; }
+    i64 content = available - separators;
+    if (content < 0) { content = 0; }
+    i64 auto_count = 0;
+    i64 used = 0;
+    for (i64 col = 0; col < columns; col = col + 1) {
+        u16 requested_width = 0;
+        if (col < requested.len()) { requested_width = requested.get(col); }
+        i64 width = (i64)requested_width;
+        if (width <= 0) {
+            auto_count = auto_count + 1;
+            width = table_column_content_width(rows, col);
+        }
+        if (width < 1) { width = 1; }
+        out.push((u16)width);
+        used = used + width;
+    }
+    if (used > content && used > 0) {
+        for (i64 col = 0; col < columns; col = col + 1) {
+            i64 width = (i64)out.get(col) * content / used;
+            if (width < 1) { width = 1; }
+            out.set(col, (u16)width);
+        }
+    } else if (used < content && auto_count > 0) {
+        i64 extra = (content - used) / auto_count;
+        if (extra > 0) {
+            for (i64 col = 0; col < columns; col = col + 1) {
+                if (col >= requested.len() || requested.get(col) == (u16)0) {
+                    out.set(col, out.get(col) + (u16)extra);
+                }
+            }
+        }
+    }
+    return move out;
+}
+
+i64 table_column_content_width(&Vec<TableRow> rows, i64 column) {
+    i64 width = 1;
+    for (i64 row_idx = 0; row_idx < rows.len(); row_idx = row_idx + 1) {
+        TableRow* row = rows.get_ptr(row_idx);
+        if (column < row.cells.len()) {
+            TableCell* cell = row.cells.get_ptr(column);
+            i64 cell_width = text_width(cell.text.to_str());
+            if (cell_width > width) { width = cell_width; }
+        }
+    }
+    return width;
+}

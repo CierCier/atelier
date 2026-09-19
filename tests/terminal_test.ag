@@ -28,12 +28,43 @@ i32 main() {
         f1.buf.set_string(0, 0, "hi", Style.new(), 5);
         t.flush();
         assert_eq_i64(0, w.len, "no-change flush emits nothing");
+        // A fresh frame starts empty. A shorter render must clear trailing
+        // cells instead of inheriting them from every other frame.
+        Frame f_short = t.frame();
+        f_short.buf.set_string(0, 0, "h", Style.new(), 5);
+        Cell* tail = f_short.buf.cell_mut(1, 0);
+        assert_eq_i64(0, (i64)tail.ch, "short frame clears trailing cells");
+        t.flush();
+        w.len = 0;
         // One cell changes: output is small and local.
         Frame f2 = t.frame();
         f2.buf.set_string(0, 0, "ho", Style.new(), 5);
-        w.len = 0;
         t.flush();
         assert_true(w.len > 0 && w.len < first_len, "delta smaller than full");
+    }
+    test_start("wide glyph does not emit a trailer cell");
+    {
+        u8 scratch2[4096];
+        BufWriter w2;
+        w2.data = (i64)&scratch2[0];
+        w2.len = 0;
+        w2.cap = -4096;
+        w2.fd = -1;
+        w2.list_next = (BufWriter*)0;
+        w2.list_prev = (BufWriter*)0;
+        w2.mode = IOMODE_MEMORY;
+        Terminal t2 = Terminal.new(&w2, Rect.new((u16)0, (u16)0, (u16)5, (u16)1));
+        Frame wide = t2.frame();
+        wide.buf.set_string(0, 0, "あx", Style.new(), 5);
+        t2.flush();
+        bool adjacent = false;
+        for (i64 i = 0; i + 3 < w2.len; i = i + 1) {
+            if (scratch2[i] == (u8)0xE3 && scratch2[i + 1] == (u8)0x81
+                && scratch2[i + 2] == (u8)0x82 && scratch2[i + 3] == (u8)120) {
+                adjacent = true;
+            }
+        }
+        assert_true(adjacent, "wide glyph is followed directly by next cell");
     }
     return done();
 }

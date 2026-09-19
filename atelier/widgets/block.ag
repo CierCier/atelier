@@ -8,6 +8,7 @@ import atelier.buffer;
 import atelier.layout;
 import atelier.style;
 import atelier.text;
+import atelier.update;
 import atelier.widget;
 
 const u8 BORDER_TOP = 1;
@@ -18,6 +19,8 @@ const u8 BORDER_ALL = 15;
 
 struct Block {
     u8 borders;
+    UpdateInterval cadence;
+    Margin padding;
     Style border_style;
     Style style;
     str title;
@@ -29,6 +32,8 @@ impl Block {
     Block new() {
         Block b;
         b.borders = BORDER_ALL;
+        b.cadence = UpdateInterval.new(0);
+        b.padding = Margin.all((u16)0);
         b.border_style = Style.new();
         b.style = Style.new();
         b.title = (str)0;
@@ -45,6 +50,24 @@ impl Block {
     Block borders(Block self, u8 borders) {
         self.borders = borders;
         return self;
+    }
+
+    Block padding(Block self, u16 padding) {
+        self.padding = Margin.all(padding);
+        return self;
+    }
+
+    Block update_interval(Block self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
     }
 
     Block border_style(Block self, Style style) {
@@ -89,10 +112,11 @@ impl Block {
         }
         if (w < 0) { w = 0; }
         if (h < 0) { h = 0; }
-        return Rect.new((u16)x, (u16)y, (u16)w, (u16)h);
+        Rect content = Rect.new((u16)x, (u16)y, (u16)w, (u16)h);
+        return content.inner(self.padding);
     }
 
-    void render_border(&self, Buffer* buf, Rect area) {
+    void render_border(&self, &mut Buffer buf, Rect area) {
         i64 x0 = (i64)area.x;
         i64 y0 = (i64)area.y;
         i64 x1 = x0 + (i64)area.width - 1;
@@ -129,7 +153,7 @@ impl Block {
         if (br) { buf.set_string(x1, y1, "┘", st, 1); }
     }
 
-    void render_title(&self, Buffer* buf, Rect area) {
+    void render_title(&self, &mut Buffer buf, Rect area) {
         if (self.title == (str)0) {
             return;
         }
@@ -177,7 +201,7 @@ bool align_is_right(Alignment al) {
 }
 
 impl Widget for Block {
-    void render(*self, Rect* area, Buffer* buf) {
+    void render(&self, &Rect area, &mut Buffer buf) {
         buf.set_style(*area, self.style);
         self.render_border(buf, *area);
         self.render_title(buf, *area);

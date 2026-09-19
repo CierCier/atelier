@@ -1,0 +1,66 @@
+// Overlay: the two primitives popups, dialogs, and toasts need — clearing
+// a region back to empty cells, and centering a rect inside another.
+// Deliberately not a modal framework: the application owns stacking,
+// focus, and dismissal; these just make it paint correctly.
+
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.widget;
+
+// Clear: reset every cell in its area to empty, erasing whatever rendered
+// beneath. Render this before the popup content.
+struct Clear {
+}
+
+impl Clear {
+    Clear new() {
+        Clear c;
+        return c;
+    }
+}
+
+impl Widget for Clear {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        for (i64 y = (i64)area.y; y < (i64)area.y + (i64)area.height; y = y + 1) {
+            for (i64 x = (i64)area.x; x < (i64)area.x + (i64)area.width; x = x + 1) {
+                Cell* c = buf.cell_mut(x, y);
+                if (c == (Cell*)0) {
+                    continue;
+                }
+                c.ch = (u32)0;
+                c.continuation = false;
+                c.fg = Color.Reset;
+                c.bg = Color.Reset;
+                c.mods = (u16)0;
+            }
+        }
+    }
+}
+
+/// Center a `width` × `height` rect inside `area`, clamped to fit.
+Rect centered_rect(Rect area, u16 width, u16 height) {
+    i64 w = (i64)width;
+    i64 h = (i64)height;
+    if (w > (i64)area.width) {
+        w = (i64)area.width;
+    }
+    if (h > (i64)area.height) {
+        h = (i64)area.height;
+    }
+    if (w < 0) {
+        w = 0;
+    }
+    if (h < 0) {
+        h = 0;
+    }
+    i64 x = (i64)area.x + ((i64)area.width - w) / 2;
+    i64 y = (i64)area.y + ((i64)area.height - h) / 2;
+    if (x < (i64)area.x) {
+        x = (i64)area.x;
+    }
+    if (y < (i64)area.y) {
+        y = (i64)area.y;
+    }
+    return Rect.new((u16)x, (u16)y, (u16)w, (u16)h);
+}

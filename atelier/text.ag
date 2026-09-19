@@ -103,6 +103,22 @@ u16 char_width(u32 cp) {
     return (u16)1;
 }
 
+/// Display width of a borrowed UTF-8 string in terminal cells.
+i64 text_width(str text) {
+    if (text == (str)0) {
+        return 0;
+    }
+    u8* p = (u8*)text;
+    i64 len = cstr_len(p);
+    i64 idx = 0;
+    i64 width = 0;
+    while (idx < len) {
+        u32 cp = utf8_next(p, len, &idx);
+        width = width + (i64)char_width(cp);
+    }
+    return width;
+}
+
 struct Span {
     str text;
     Style style;
@@ -125,18 +141,7 @@ impl Span {
 
     /// Display width in cells (sum of codepoint widths).
     i64 width(&self) {
-        if (self.text == (str)0) {
-            return 0;
-        }
-        u8* p = (u8*)self.text;
-        i64 len = cstr_len(p);
-        i64 idx = 0;
-        i64 w = 0;
-        while (idx < len) {
-            u32 cp = utf8_next(p, len, &idx);
-            w = w + (i64)char_width(cp);
-        }
-        return w;
+        return text_width(self.text);
     }
 }
 

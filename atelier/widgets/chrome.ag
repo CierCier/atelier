@@ -1,0 +1,186 @@
+// Chrome: single-row furnishings every TUI ends up needing — a key-hint
+// status bar and a labeled horizontal divider.
+
+import std.mem.vec;
+import std.fmt;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.widget;
+import atelier.widgets.block;
+
+struct StatusItem {
+    String key;
+    String action;
+}
+
+impl StatusItem {
+    StatusItem new(str key, str action) {
+        StatusItem i;
+        i.key = String.from_str(key);
+        i.action = String.from_str(action);
+        return move i;
+    }
+}
+
+// StatusBar: ` q quit   p pause            playing · carbon `.
+// Key cells take key_style, actions take style, the trailing cell
+// right-aligns in right_style. Renders the first row of its area.
+struct StatusBar {
+    Vec<StatusItem> items;
+    String right;
+    Style style;
+    Style key_style;
+    Style right_style;
+}
+
+impl StatusBar {
+    StatusBar new() {
+        StatusBar b;
+        b.items = Vec<StatusItem>.new();
+        b.right = String.new();
+        b.style = Style.new().dim();
+        b.key_style = Style.new().bold();
+        b.right_style = Style.new().dim();
+        return move b;
+    }
+
+    StatusBar item(StatusBar self, str key, str action) {
+        self.items.push(StatusItem.new(key, action));
+        return move self;
+    }
+
+    StatusBar right_text(StatusBar self, str text) {
+        self.right = String.from_str(text);
+        return move self;
+    }
+
+    StatusBar style(StatusBar self, Style style) {
+        self.style = style;
+        return move self;
+    }
+
+    StatusBar key_style(StatusBar self, Style style) {
+        self.key_style = style;
+        return move self;
+    }
+
+    StatusBar right_style(StatusBar self, Style style) {
+        self.right_style = style;
+        return move self;
+    }
+
+    i64 len(&self) {
+        return self.items.len();
+    }
+}
+
+impl Widget for StatusBar {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        if (area.width == (u16)0 || area.height == (u16)0) {
+            return;
+        }
+        i64 y = (i64)area.y;
+        i64 w = (i64)area.width;
+        buf.set_style(*area, self.style);
+        i64 x = (i64)area.x;
+        for (i64 i = 0; i < self.items.len(); i = i + 1) {
+            StatusItem* item = self.items.get_ptr(i);
+            i64 max = (i64)area.x + w - x;
+            if (max <= 0) {
+                break;
+            }
+            x = buf.set_string(x, y, " ", self.style, max);
+            max = (i64)area.x + w - x;
+            if (max <= 0) {
+                break;
+            }
+            x = buf.set_string(x, y, item.key.to_str(), self.key_style, max);
+            max = (i64)area.x + w - x;
+            if (max <= 0) {
+                break;
+            }
+            x = buf.set_string(x, y, " ", self.style, max);
+            max = (i64)area.x + w - x;
+            if (max <= 0) {
+                break;
+            }
+            x = buf.set_string(x, y, item.action.to_str(), self.style, max);
+        }
+        if (self.right.len() > 0) {
+            i64 rw = text_width(self.right.to_str());
+            if (rw > w) {
+                rw = w;
+            }
+            buf.set_string((i64)area.x + w - rw, y, self.right.to_str(), self.right_style, rw);
+        }
+    }
+}
+
+// HRule: `── build ──` divider. Renders the first row of its area; the
+// label (borrowed, none by default) sits left, center, or right.
+struct HRule {
+    str label;
+    Style style;
+    Alignment align;
+}
+
+impl HRule {
+    HRule new() {
+        HRule r;
+        r.label = (str)0;
+        r.style = Style.new().fg(Color.BrightBlack);
+        r.align = Alignment.Left;
+        return r;
+    }
+
+    HRule label(HRule self, str label) {
+        self.label = label;
+        return self;
+    }
+
+    HRule style(HRule self, Style style) {
+        self.style = style;
+        return self;
+    }
+
+    HRule alignment(HRule self, Alignment align) {
+        self.align = align;
+        return self;
+    }
+}
+
+impl Widget for HRule {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        if (area.width == (u16)0 || area.height == (u16)0) {
+            return;
+        }
+        i64 y = (i64)area.y + (i64)area.height / 2;
+        i64 w = (i64)area.width;
+        for (i64 col = 0; col < w; col = col + 1) {
+            buf.set_string((i64)area.x + col, y, "─", self.style, 1);
+        }
+        if (self.label == (str)0) {
+            return;
+        }
+        String tag = @format(" {} ", self.label);
+        i64 tw = text_width(tag.to_str());
+        if (tw > w) {
+            tag.drop();
+            return;
+        }
+        i64 x = (i64)area.x + 1;
+        Alignment al = self.align;
+        if (align_is_center(al)) {
+            x = (i64)area.x + (w - tw) / 2;
+        } else if (align_is_right(al)) {
+            x = (i64)area.x + w - tw - 1;
+        }
+        if (x < (i64)area.x) {
+            x = (i64)area.x;
+        }
+        buf.set_string(x, y, tag.to_str(), self.style.bold(), tw);
+        tag.drop();
+    }
+}

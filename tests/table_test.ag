@@ -1,0 +1,32 @@
+import atelier.widgets.table;
+import atelier.buffer;
+import atelier.layout;
+import std.mem.vec;
+import std.test;
+
+TableRow row(str a, str b) {
+    Vec<TableCell> cells = Vec<TableCell>.new();
+    cells.push(TableCell.new(a));
+    cells.push(TableCell.new(b));
+    return TableRow.new(move cells);
+}
+
+i32 main() {
+    test_start("table renders columns and selection");
+    Vec<TableRow> rows = Vec<TableRow>.new();
+    rows.push(row("name", "state"));
+    rows.push(row("build", "done"));
+    Vec<u16> widths = Vec<u16>.new();
+    widths.push((u16)6);
+    widths.push((u16)6);
+    Table table = Table.new(move rows).widths(move widths).header_rows((u16)1);
+    TableState state = TableState.new();
+    state.select(1);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)14, (u16)2);
+    Buffer buf = Buffer.empty(area);
+    table.render(&area, &buf, &state);
+    assert_eq_i64(110, (i64)buf.cell_mut(0, 0).ch, "header text");
+    assert_eq_i64(98, (i64)buf.cell_mut(0, 1).ch, "selected row text");
+    assert_eq_i64(0x2502, (i64)buf.cell_mut(6, 0).ch, "column separator");
+    return done();
+}

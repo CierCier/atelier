@@ -38,5 +38,15 @@ i32 main() {
         Cell* no_left = b.cell_mut(0, 1);
         assert_eq_i64(0, (i64)no_left.ch, "no left border, middle empty");
     }
+    test_start("padding is inside borders");
+    {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)10, (u16)5);
+        Block blk = Block.new().padding((u16)1);
+        Rect inner = blk.inner(a);
+        assert_eq_i64(2, (i64)inner.x, "padding x");
+        assert_eq_i64(2, (i64)inner.y, "padding y");
+        assert_eq_i64(6, (i64)inner.width, "padding width");
+        assert_eq_i64(1, (i64)inner.height, "padding height");
+    }
     return done();
 }

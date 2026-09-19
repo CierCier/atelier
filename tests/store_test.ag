@@ -2,6 +2,7 @@ import atelier.store;
 import atelier.widgets.list;
 import std.json;
 import std.test;
+import std.mem.alloc;
 
 i32 main() {
     test_start("list state json round-trip");
@@ -16,6 +17,7 @@ i32 main() {
         ListState back = r.unwrap();
         assert_eq_i64(3, back.selected, "selected restored");
         assert_eq_i64(1, back.offset, "offset restored");
+        free((void*)snap);
     }
     test_start("file save and load");
     {

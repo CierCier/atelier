@@ -36,13 +36,17 @@ i32 main() {
     }
     test_start("clipping and wide chars");
     {
-        Rect a = Rect.new((u16)0, (u16)0, (u16)4, (u16)1);
+        Rect a = Rect.new((u16)0, (u16)0, (u16)5, (u16)1);
         Buffer b = Buffer.empty(a);
         // あ is width 2; only 2 fit in... write at x=3: clipped.
         i64 end = b.set_string(3, 0, "あ", Style.new(), 10);
         assert_eq_i64(5, end, "wide char advances 2");
         Cell* c = b.cell_mut(3, 0);
         assert_eq_i64(0x3042, (i64)c.ch, "wide char stored");
+        Cell* wide_tail = b.cell_mut(4, 0);
+        assert_true(wide_tail.continuation, "wide char records continuation cell");
+        b.set_cell(3, 0, (u32)120, Style.new());
+        assert_true(!wide_tail.continuation, "narrow overwrite clears continuation");
         // Out-of-bounds writes are dropped silently.
         b.set_string(99, 99, "z", Style.new(), 10);
         assert_true(b.cell_mut(99, 99) == (Cell*)0, "oob reads null");

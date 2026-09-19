@@ -112,7 +112,7 @@ const i64 TAG_FILL = 3;
 const i64 TAG_MIN = 4;
 const i64 TAG_MAX = 5;
 
-i64 constraint_tag(Constraint* c) {
+i64 constraint_tag(&Constraint c) {
     return match *c {
         Length(v) : TAG_LENGTH,
         Percentage(v) : TAG_PERCENT,
@@ -124,7 +124,7 @@ i64 constraint_tag(Constraint* c) {
 }
 
 /// Length/Min reservation, or -1 when the constraint is not fixed.
-i64 constraint_fixed(Constraint* c) {
+i64 constraint_fixed(&Constraint c) {
     return match *c {
         Length(v) : (i64)v,
         Min(v) : (i64)v,
@@ -133,7 +133,7 @@ i64 constraint_fixed(Constraint* c) {
 }
 
 /// Percentage value, or -1 when not a percentage.
-i64 constraint_percent(Constraint* c) {
+i64 constraint_percent(&Constraint c) {
     return match *c {
         Percentage(v) : (i64)v,
         _ : -1,
@@ -148,7 +148,7 @@ i64 ratio_weight(u32 a, u32 b) {
 }
 
 /// Remainder weight: scaled ratio, fill count, 1 for Min/Max, else 0.
-i64 constraint_weight(Constraint* c) {
+i64 constraint_weight(&Constraint c) {
     return match *c {
         Ratio(a, b) : ratio_weight(a, b),
         Fill(v) : (i64)v,
@@ -159,7 +159,7 @@ i64 constraint_weight(Constraint* c) {
 }
 
 /// Max cap, or -1 when not a Max constraint.
-i64 constraint_max(Constraint* c) {
+i64 constraint_max(&Constraint c) {
     return match *c {
         Max(v) : (i64)v,
         _ : -1,
@@ -219,7 +219,7 @@ impl Layout {
         // Pass 1: fixed lengths and minimum reservations.
         i64 used = 0;
         for (i64 i = 0; i < n; i = i + 1) {
-            Constraint* c = self.constraints.get_ptr(i);
+            &Constraint c = self.constraints.get_ref(i);
             i64 f = constraint_fixed(c);
             if (f >= 0) {
                 i64 s = f;
@@ -231,7 +231,7 @@ impl Layout {
         }
         // Pass 2: percentages of the full inner size.
         for (i64 i = 0; i < n; i = i + 1) {
-            Constraint* c = self.constraints.get_ptr(i);
+            &Constraint c = self.constraints.get_ref(i);
             i64 p = constraint_percent(c);
             if (p >= 0) {
                 i64 s = total * p / (i64)100;
@@ -246,12 +246,12 @@ impl Layout {
         if (rem < 0) { rem = 0; }
         i64 wsum = 0;
         for (i64 i = 0; i < n; i = i + 1) {
-            Constraint* c = self.constraints.get_ptr(i);
+            &Constraint c = self.constraints.get_ref(i);
             wsum = wsum + constraint_weight(c);
         }
         if (wsum > 0) {
             for (i64 i = 0; i < n; i = i + 1) {
-                Constraint* c = self.constraints.get_ptr(i);
+                &Constraint c = self.constraints.get_ref(i);
                 i64 w = constraint_weight(c);
                 if (w > 0) {
                     i64 base = 0;
@@ -274,17 +274,31 @@ impl Layout {
         Flex fx = self.flex;
         if (fx == Flex.Legacy) {
             if (rem > 0) {
-                // Grow the last flexible segment, else the last one.
-                i64 last = n - 1;
+                // Grow the last flexible segment that still has capacity.
+                // Max is flexible during remainder allocation, but must never
+                // be grown past its declared cap.
+                i64 last = -1;
                 for (i64 i = n - 1; i >= 0; i = i - 1) {
-                    Constraint* c = self.constraints.get_ptr(i);
-                    if (constraint_tag(c) >= TAG_RATIO) {
-                        last = i;
-                        break;
+                    &Constraint c = self.constraints.get_ref(i);
+                    if (constraint_tag(c) != TAG_LENGTH) {
+                        i64 cap = constraint_max(c);
+                        if (cap < 0 || sizes.get(i) < cap) {
+                            last = i;
+                            break;
+                        }
                     }
                 }
                 if (last >= 0) {
-                    sizes.set(last, sizes.get(last) + rem);
+                    &Constraint c = self.constraints.get_ref(last);
+                    i64 extra = rem;
+                    i64 cap = constraint_max(c);
+                    if (cap >= 0 && sizes.get(last) + extra > cap) {
+                        extra = cap - sizes.get(last);
+                    }
+                    if (extra > 0) {
+                        sizes.set(last, sizes.get(last) + extra);
+                        used = used + extra;
+                    }
                 }
             }
         } else if (fx == Flex.Center) {

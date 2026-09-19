@@ -17,6 +17,7 @@ struct Cell {
     Color fg;
     Color bg;
     u16 mods;
+    bool continuation;
 }
 
 impl Cell {
@@ -26,11 +27,12 @@ impl Cell {
         c.fg = Color.Reset;
         c.bg = Color.Reset;
         c.mods = (u16)0;
+        c.continuation = false;
         return c;
     }
 }
 
-bool cell_eq(Cell* a, Cell* b) {
+bool cell_eq(&Cell a, &Cell b) {
     if (a.ch != b.ch) {
         return false;
     }
@@ -40,11 +42,11 @@ bool cell_eq(Cell* a, Cell* b) {
     if (a.bg != b.bg) {
         return false;
     }
-    return a.mods == b.mods;
+    return a.mods == b.mods && a.continuation == b.continuation;
 }
 
 /// Apply a style patch to a resolved cell.
-void cell_apply(Cell* c, Style style) {
+void cell_apply(&mut Cell c, Style style) {
     Color unset = Color.Reset;
     if (style.fg != unset) {
         c.fg = style.fg;
@@ -97,7 +99,7 @@ impl Buffer {
             && y < (i64)self.area.y + (i64)self.area.height;
     }
 
-    Cell* cell_mut(&self, i64 x, i64 y) {
+    Cell* cell_mut(&mut self, i64 x, i64 y) {
         if (!self.in_bounds(x, y)) {
             return (Cell*)0;
         }
@@ -105,19 +107,36 @@ impl Buffer {
     }
 
     /// Write one codepoint with a resolved style; clips out of bounds.
-    void set_cell(&self, i64 x, i64 y, u32 ch, Style style) {
+    void set_cell(&mut self, i64 x, i64 y, u32 ch, Style style) {
         Cell* c = self.cell_mut(x, y);
         if (c == (Cell*)0) {
             return;
         }
+        // Replacing a wide lead cell must release its continuation cell.
+        Cell* next = self.cell_mut(x + 1, y);
+        if (next != (Cell*)0 && next.continuation) {
+            next.ch = (u32)0;
+            next.continuation = false;
+            next.fg = Color.Reset;
+            next.bg = Color.Reset;
+            next.mods = (u16)0;
+        }
         c.ch = ch;
-        cell_apply(c, style);
+        c.continuation = false;
+        cell_apply(&mut *c, style);
+        if (char_width(ch) == (u16)2 && next != (Cell*)0) {
+            next.ch = (u32)0;
+            next.continuation = true;
+            next.fg = c.fg;
+            next.bg = c.bg;
+            next.mods = c.mods;
+        }
     }
 
     /// Write text left to right, width-aware. Returns the x after the last
     /// written cell. Zero-width codepoints are skipped; wide ones advance
     /// two cells; writing stops at max_width cells.
-    i64 set_string(&self, i64 x, i64 y, str text, Style style, i64 max_width) {
+    i64 set_string(&mut self, i64 x, i64 y, str text, Style style, i64 max_width) {
         if (text == (str)0) {
             return x;
         }
@@ -127,7 +146,7 @@ impl Buffer {
 
     /// Write bytes in [from, to) — a range of a larger string, so wrapped
     /// rows render without copying. Decode is bounded at `to`.
-    i64 set_bytes(&self, i64 x, i64 y, u8* p, i64 from, i64 to, Style style, i64 max_width) {
+    i64 set_bytes(&mut self, i64 x, i64 y, u8* p, i64 from, i64 to, Style style, i64 max_width) {
         if (p == (u8*)0 || from >= to || max_width <= 0) {
             return x;
         }
@@ -149,7 +168,7 @@ impl Buffer {
     }
 
     /// Fill `area` with a style patch.
-    void set_style(&self, Rect area, Style style) {
+    void set_style(&mut self, Rect area, Style style) {
         for (i64 y = (i64)area.y; y < (i64)area.y + (i64)area.height; y = y + 1) {
             for (i64 x = (i64)area.x; x < (i64)area.x + (i64)area.width; x = x + 1) {
                 Cell* c = self.cell_mut(x, y);
@@ -160,7 +179,7 @@ impl Buffer {
         }
     }
 
-    i64 set_line(&self, i64 x, i64 y, Line* line, i64 max_width) {
+    i64 set_line(&mut self, i64 x, i64 y, &Line line, i64 max_width) {
         i64 w = line.width();
         if (w > max_width) {
             w = max_width;
@@ -183,6 +202,7 @@ impl Buffer {
         for (i64 i = 0; i < self.cells.len(); i = i + 1) {
             Cell* c = self.cells.get_ptr(i);
             c.ch = (u32)0;
+            c.continuation = false;
             Color reset = Color.Reset;
             c.fg = reset;
             c.bg = reset;
@@ -201,9 +221,12 @@ impl Buffer {
     }
 
     /// Changed cells vs the previous frame, in row-major order.
-    Vec<CellUpdate> diff(&self, Buffer* prev) {
+    Vec<CellUpdate> diff(&self, &Buffer prev) {
         Vec<CellUpdate> out = Vec<CellUpdate>.new();
-        if (prev.cells.len() != self.cells.len()) {
+        if (prev.area.x != self.area.x || prev.area.y != self.area.y
+            || prev.area.width != self.area.width
+            || prev.area.height != self.area.height
+            || prev.cells.len() != self.cells.len()) {
             // Different geometry: report everything.
             for (i64 i = 0; i < self.cells.len(); i = i + 1) {
                 Cell* c = self.cells.get_ptr(i);
@@ -220,7 +243,7 @@ impl Buffer {
         for (i64 i = 0; i < self.cells.len(); i = i + 1) {
             Cell* c = self.cells.get_ptr(i);
             Cell* old = prev.cells.get_ptr(i);
-            if (!cell_eq(c, old)) {
+            if (!cell_eq(&*c, &*old)) {
                 i64 x = (i64)self.area.x + i % (i64)self.area.width;
                 i64 y = (i64)self.area.y + i / (i64)self.area.width;
                 CellUpdate u;

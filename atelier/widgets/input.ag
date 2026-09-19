@@ -1,0 +1,268 @@
+// TextInput: single-line editing state plus a renderer. The editor state is
+// deliberately separate from the widget so applications can bind it to their
+// own submit/cancel handling and persistence.
+
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+
+struct TextInputState {
+    String value;
+    i64 cursor;
+}
+
+impl TextInputState {
+    TextInputState new() {
+        TextInputState s;
+        s.value = String.new();
+        s.cursor = 0;
+        return move s;
+    }
+
+    TextInputState from(str value) {
+        TextInputState s;
+        s.value = String.from_str(value);
+        s.cursor = s.value.len();
+        return move s;
+    }
+
+    str text(&self) {
+        return self.value.to_str();
+    }
+
+    void set_text(&mut self, str value) {
+        self.value.clear();
+        if (value != (str)0) {
+            self.value.push_str(value);
+        }
+        self.cursor = self.value.len();
+    }
+
+    void clear(&mut self) {
+        self.value.clear();
+        self.cursor = 0;
+    }
+
+    void insert(&mut self, str text) {
+        if (text == (str)0) { return; }
+        i64 at = self.cursor;
+        if (at < 0) { at = 0; }
+        if (at > self.value.len()) { at = self.value.len(); }
+        String old = move self.value;
+        String left = old.substr(0, at);
+        String right = old.substr(at, old.len() - at);
+        String next = String.new();
+        next.push_str(left.to_str());
+        next.push_str(text);
+        next.push_str(right.to_str());
+        self.value = move next;
+        self.cursor = at + cstr_len((u8*)text);
+    }
+
+    void backspace(&mut self) {
+        if (self.cursor <= 0 || self.value.len() <= 0) { return; }
+        i64 start = text_input_previous_boundary(self.value.to_str(), self.cursor);
+        text_input_remove_range(self, start, self.cursor);
+        self.cursor = start;
+    }
+
+    void delete_forward(&mut self) {
+        if (self.cursor >= self.value.len()) { return; }
+        i64 end = text_input_next_boundary(self.value.to_str(), self.cursor);
+        text_input_remove_range(self, self.cursor, end);
+    }
+
+    void move_left(&mut self) {
+        self.cursor = text_input_previous_boundary(self.value.to_str(), self.cursor);
+    }
+
+    void move_right(&mut self) {
+        self.cursor = text_input_next_boundary(self.value.to_str(), self.cursor);
+    }
+
+    void home(&mut self) {
+        self.cursor = 0;
+    }
+
+    void end(&mut self) {
+        self.cursor = self.value.len();
+    }
+}
+
+struct TextInput {
+    UpdateInterval cadence;
+    str prompt;
+    str placeholder;
+    Style style;
+    Style cursor_style;
+    Style placeholder_style;
+    Block block;
+    bool has_block;
+}
+
+impl TextInput {
+    TextInput new() {
+        TextInput i;
+        i.cadence = UpdateInterval.new(0);
+        i.prompt = "> ";
+        i.placeholder = (str)0;
+        i.style = Style.new();
+        i.cursor_style = Style.new().reversed();
+        i.placeholder_style = Style.new().dim();
+        i.block = Block.new();
+        i.has_block = false;
+        return i;
+    }
+
+    TextInput prompt(TextInput self, str prompt) {
+        self.prompt = prompt;
+        return self;
+    }
+
+    TextInput placeholder(TextInput self, str placeholder) {
+        self.placeholder = placeholder;
+        return self;
+    }
+
+    TextInput style(TextInput self, Style style) {
+        self.style = style;
+        return self;
+    }
+
+    TextInput cursor_style(TextInput self, Style style) {
+        self.cursor_style = style;
+        return self;
+    }
+
+    TextInput placeholder_style(TextInput self, Style style) {
+        self.placeholder_style = style;
+        return self;
+    }
+
+    TextInput block(TextInput self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return self;
+    }
+
+    TextInput update_interval(TextInput self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+}
+
+impl StatefulWidget for TextInput {
+    type State = TextInputState;
+
+    void render(&self, &Rect area, &mut Buffer buf, &mut TextInputState state) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) { return; }
+        i64 prompt_width = text_width(self.prompt);
+        if (prompt_width > (i64)inner.width) { prompt_width = (i64)inner.width; }
+        buf.set_string((i64)inner.x, (i64)inner.y, self.prompt, self.style.bold(), prompt_width);
+        i64 value_x = (i64)inner.x + prompt_width;
+        i64 value_width = (i64)inner.width - prompt_width;
+        if (value_width <= 0) { return; }
+
+        if (state.value.len() == 0 && self.placeholder != (str)0) {
+            buf.set_string(value_x, (i64)inner.y, self.placeholder, self.placeholder_style, value_width);
+            buf.set_cell(value_x, (i64)inner.y, (u32)32, self.cursor_style);
+            return;
+        }
+        str value = state.value.to_str();
+        u8* p = (u8*)value;
+        i64 cursor = state.cursor;
+        if (cursor < 0) { cursor = 0; }
+        if (cursor > state.value.len()) { cursor = state.value.len(); }
+        i64 before_width = text_input_byte_width(p, cursor);
+        i64 start = 0;
+        if (before_width >= value_width) {
+            // Keep the cursor visible by dropping complete codepoints from the left.
+            i64 visible_start = 0;
+            i64 visible_width = before_width;
+            while (visible_start < cursor && visible_width >= value_width) {
+                i64 next = text_input_next_boundary(value, visible_start);
+                i64 removed = text_input_byte_width(p + visible_start, next - visible_start);
+                visible_start = next;
+                visible_width = visible_width - removed;
+            }
+            start = visible_start;
+        }
+        i64 start_width = text_input_byte_width(p, start);
+        buf.set_bytes(value_x, (i64)inner.y, p, start, state.value.len(), self.style, value_width);
+        i64 cursor_x = value_x + before_width - start_width;
+        if (cursor_x < value_x) { cursor_x = value_x; }
+        if (cursor_x >= value_x + value_width) { cursor_x = value_x + value_width - 1; }
+        if (cursor < state.value.len()) {
+            i64 idx = cursor;
+            u32 cp = utf8_next(p, state.value.len(), &idx);
+            buf.set_cell(cursor_x, (i64)inner.y, cp, self.cursor_style);
+        } else {
+            buf.set_cell(cursor_x, (i64)inner.y, (u32)32, self.cursor_style);
+        }
+    }
+}
+
+void text_input_remove_range(&mut TextInputState state, i64 from, i64 to) {
+    if (from < 0) { from = 0; }
+    if (to > state.value.len()) { to = state.value.len(); }
+    if (from >= to) { return; }
+    String old = move state.value;
+    String left = old.substr(0, from);
+    String right = old.substr(to, old.len() - to);
+    String next = String.new();
+    next.push_str(left.to_str());
+    next.push_str(right.to_str());
+    state.value = move next;
+}
+
+i64 text_input_previous_boundary(str text, i64 cursor) {
+    if (text == (str)0 || cursor <= 0) { return 0; }
+    u8* p = (u8*)text;
+    i64 idx = 0;
+    i64 previous = 0;
+    while (idx < cursor) {
+        previous = idx;
+        utf8_next(p, cursor, &idx);
+    }
+    return previous;
+}
+
+i64 text_input_next_boundary(str text, i64 cursor) {
+    if (text == (str)0) { return 0; }
+    u8* p = (u8*)text;
+    i64 len = cstr_len(p);
+    if (cursor < 0) { cursor = 0; }
+    if (cursor >= len) { return len; }
+    i64 idx = cursor;
+    utf8_next(p, len, &idx);
+    return idx;
+}
+
+i64 text_input_byte_width(u8* p, i64 len) {
+    if (p == (u8*)0 || len <= 0) { return 0; }
+    i64 idx = 0;
+    i64 width = 0;
+    while (idx < len) {
+        u32 cp = utf8_next(p, len, &idx);
+        width = width + (i64)char_width(cp);
+    }
+    return width;
+}

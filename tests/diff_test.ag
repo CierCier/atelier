@@ -1,0 +1,19 @@
+import atelier.widgets.diff;
+import atelier.buffer;
+import atelier.layout;
+import std.mem.vec;
+import std.test;
+
+i32 main() {
+    test_start("diff prefixes semantic lines");
+    Vec<DiffLine> lines = Vec<DiffLine>.new();
+    lines.push(DiffLine.new("old", DiffKind.Removed));
+    lines.push(DiffLine.new("new", DiffKind.Added));
+    DiffView view = DiffView.new(move lines);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)8, (u16)2);
+    Buffer buf = Buffer.empty(area);
+    view.render(&area, &buf);
+    assert_eq_i64(45, (i64)buf.cell_mut(0, 0).ch, "removed prefix");
+    assert_eq_i64(43, (i64)buf.cell_mut(0, 1).ch, "added prefix");
+    return done();
+}

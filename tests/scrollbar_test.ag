@@ -1,0 +1,20 @@
+import atelier.widgets.scrollbar;
+import atelier.buffer;
+import atelier.layout;
+import std.test;
+
+i32 main() {
+    test_start("scrollbar maps position to thumb");
+    Rect area = Rect.new((u16)0, (u16)0, (u16)1, (u16)10);
+    Buffer buf = Buffer.empty(area);
+    Scrollbar bar = Scrollbar.new();
+    ScrollbarState state = ScrollbarState.new(100);
+    state.set_position(0);
+    bar.render(&area, &buf, &state);
+    assert_eq_i64(0x2588, (i64)buf.cell_mut(0, 0).ch, "thumb starts at top");
+    state.set_position(99);
+    buf.reset();
+    bar.render(&area, &buf, &state);
+    assert_eq_i64(0x2588, (i64)buf.cell_mut(0, 9).ch, "thumb reaches bottom");
+    return done();
+}

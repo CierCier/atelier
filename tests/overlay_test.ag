@@ -1,0 +1,33 @@
+import atelier.widgets.overlay;
+import atelier.widgets.paragraph;
+import atelier.buffer;
+import atelier.layout;
+import atelier.text;
+import std.test;
+
+i32 main() {
+    test_start("clear erases only its region");
+    Rect area = Rect.new((u16)0, (u16)0, (u16)10, (u16)3);
+    Buffer buf = Buffer.empty(area);
+    Text t = Text.from("hello world");
+    Paragraph p = Paragraph.new(move t).wrap(false);
+    p.render(&area, &buf);
+    assert_eq_i64(0x68, (i64)buf.cell_mut(0, 0).ch, "text renders first");
+    Clear c = Clear.new();
+    Rect hole = Rect.new((u16)0, (u16)0, (u16)5, (u16)1);
+    c.render(&hole, &buf);
+    assert_eq_i64(0, (i64)buf.cell_mut(0, 0).ch, "cleared cell is empty");
+    assert_eq_i64(0x77, (i64)buf.cell_mut(6, 0).ch, "cells outside survive");
+
+    test_start("centered_rect centers and clamps");
+    Rect screen = Rect.new((u16)0, (u16)0, (u16)80, (u16)24);
+    Rect pop = centered_rect(screen, (u16)20, (u16)6);
+    assert_eq_i64(30, (i64)pop.x, "popup centered horizontally");
+    assert_eq_i64(9, (i64)pop.y, "popup centered vertically");
+    assert_eq_i64(20, (i64)pop.width, "popup keeps width");
+    Rect wide = centered_rect(screen, (u16)100, (u16)30);
+    assert_eq_i64(0, (i64)wide.x, "oversize clamps to origin");
+    assert_eq_i64(80, (i64)wide.width, "oversize clamps to area");
+    assert_eq_i64(24, (i64)wide.height, "oversize clamps height");
+    return done();
+}

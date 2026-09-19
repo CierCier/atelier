@@ -1,0 +1,81 @@
+import atelier.widgets.gauge;
+import atelier.buffer;
+import atelier.layout;
+import std.test;
+
+i32 main() {
+    test_start("gauge fills by percentage");
+    Rect area = Rect.new((u16)0, (u16)0, (u16)10, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    Gauge g = Gauge.new().percent((u16)50).label("50%");
+    g.render(&area, &buf);
+    assert_eq_i64(0x2588, (i64)buf.cell_mut(0, 0).ch, "filled half starts full");
+    assert_eq_i64(0x2591, (i64)buf.cell_mut(9, 0).ch, "empty half ends light");
+
+    test_start("sparkline renders latest values");
+    Vec<u16> values = Vec<u16>.new();
+    values.push((u16)0);
+    values.push((u16)100);
+    Sparkline spark = Sparkline.new(move values).max_value((u16)100);
+    Rect graph = Rect.new((u16)0, (u16)0, (u16)2, (u16)1);
+    Buffer graph_buf = Buffer.empty(graph);
+    spark.render(&graph, &graph_buf);
+    assert_eq_i64(0x2588, (i64)graph_buf.cell_mut(1, 0).ch, "maximum is full block");
+
+    test_start("bar chart and spinner render");
+    Vec<BarItem> bars = Vec<BarItem>.new();
+    bars.push(BarItem.new("cpu", (u16)100));
+    BarChart chart = BarChart.new(move bars).max_value((u16)100);
+    Rect bars_area = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
+    Buffer bars_buf = Buffer.empty(bars_area);
+    chart.render(&bars_area, &bars_buf);
+    assert_eq_i64(0x2588, (i64)bars_buf.cell_mut(5, 0).ch, "bar chart fills its range");
+    Spinner spinner = Spinner.new("wait");
+    spinner.next();
+    Rect spinner_area = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
+    Buffer spinner_buf = Buffer.empty(spinner_area);
+    spinner.render(&spinner_area, &spinner_buf);
+    assert_eq_i64(0x2819, (i64)spinner_buf.cell_mut(0, 0).ch, "spinner advances frame");
+
+    test_start("line gauge fills and labels its ratio");
+    LineGauge line = LineGauge.new().ratio(1, 2);
+    Rect line_area = Rect.new((u16)0, (u16)0, (u16)12, (u16)1);
+    Buffer line_buf = Buffer.empty(line_area);
+    line.render(&line_area, &line_buf);
+    assert_eq_i64(0x2588, (i64)line_buf.cell_mut(0, 0).ch, "line gauge starts filled");
+    assert_eq_i64(0x2591, (i64)line_buf.cell_mut(6, 0).ch, "line gauge ends its bar empty");
+    assert_eq_i64(0x35, (i64)line_buf.cell_mut(8, 0).ch, "line gauge suffix shows percent");
+
+    test_start("meters fill tall areas with fractional tips");
+    Gauge tall = Gauge.new().percent((u16)55).label("L");
+    Rect tall_area = Rect.new((u16)0, (u16)0, (u16)10, (u16)3);
+    Buffer tall_buf = Buffer.empty(tall_area);
+    tall.render(&tall_area, &tall_buf);
+    assert_eq_i64(0x2588, (i64)tall_buf.cell_mut(0, 2).ch, "gauge fills bottom row");
+    assert_eq_i64(0x258C, (i64)tall_buf.cell_mut(5, 0).ch, "gauge tip is a partial block");
+    assert_eq_i64(0x4C, (i64)tall_buf.cell_mut(4, 1).ch, "gauge label sits mid-box");
+    LineGauge tall_line = LineGauge.new().ratio(1, 2);
+    Rect tall_line_area = Rect.new((u16)0, (u16)0, (u16)12, (u16)3);
+    Buffer tall_line_buf = Buffer.empty(tall_line_area);
+    tall_line.render(&tall_line_area, &tall_line_buf);
+    assert_eq_i64(0x2588, (i64)tall_line_buf.cell_mut(0, 2).ch, "line gauge fills bottom row");
+    assert_eq_i64(0x258C, (i64)tall_line_buf.cell_mut(3, 2).ch, "line gauge tip is partial");
+    assert_eq_i64(0x35, (i64)tall_line_buf.cell_mut(8, 1).ch, "line gauge suffix on middle row");
+    assert_eq_i64(0, (i64)tall_line_buf.cell_mut(8, 2).ch, "no suffix off the middle row");
+
+    test_start("bar chart draws fractional tips and centers spinners");
+    Vec<BarItem> tip_bars = Vec<BarItem>.new();
+    tip_bars.push(BarItem.new("cpu", (u16)62));
+    BarChart tip_chart = BarChart.new(move tip_bars).max_value((u16)100);
+    Rect tip_area = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
+    Buffer tip_buf = Buffer.empty(tip_area);
+    tip_chart.render(&tip_area, &tip_buf);
+    assert_eq_i64(0x258D, (i64)tip_buf.cell_mut(6, 0).ch, "bar tip is a partial block");
+    Spinner tall_spin = Spinner.new("wait");
+    Rect spin_area = Rect.new((u16)0, (u16)0, (u16)8, (u16)3);
+    Buffer spin_buf = Buffer.empty(spin_area);
+    tall_spin.render(&spin_area, &spin_buf);
+    assert_eq_i64(0, (i64)spin_buf.cell_mut(0, 0).ch, "spinner leaves top row empty");
+    assert_eq_i64(0x280B, (i64)spin_buf.cell_mut(0, 1).ch, "spinner centers vertically");
+    return done();
+}

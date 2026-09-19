@@ -9,10 +9,10 @@ import atelier.buffer;
 import atelier.layout;
 
 trait Widget {
-    void render(*self, Rect* area, Buffer* buf);
+    void render(&self, &Rect area, &mut Buffer buf);
 }
 
 trait StatefulWidget {
     type State;
-    void render(*self, Rect* area, Buffer* buf, State* state);
+    void render(&self, &Rect area, &mut Buffer buf, &mut State state);
 }

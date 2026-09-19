@@ -1,0 +1,26 @@
+import atelier.widgets.tree;
+import atelier.buffer;
+import atelier.layout;
+import std.mem.vec;
+import std.test;
+
+i32 main() {
+    test_start("tree renders depth and branch marker");
+    Vec<TreeItem> items = Vec<TreeItem>.new();
+    items.push(TreeItem.new("src", (u16)0, true));
+    items.push(TreeItem.new("main.ag", (u16)1, false));
+    items.push(TreeItem.new("tests", (u16)0, true));
+    Tree tree = Tree.new(move items);
+    TreeState state = TreeState.new();
+    Rect area = Rect.new((u16)0, (u16)0, (u16)16, (u16)3);
+    Buffer buf = Buffer.empty(area);
+    tree.render(&area, &buf, &state);
+    assert_eq_i64(0x25BE, (i64)buf.cell_mut(0, 0).ch, "expanded branch marker");
+    assert_eq_i64(109, (i64)buf.cell_mut(4, 1).ch, "indented child label");
+    state.select(0);
+    tree.toggle_selected(&state);
+    buf.reset();
+    tree.render(&area, &buf, &state);
+    assert_eq_i64(116, (i64)buf.cell_mut(2, 1).ch, "collapsed tree skips child");
+    return done();
+}

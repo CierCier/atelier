@@ -1,0 +1,228 @@
+// Tree: a flat, preorder node representation with depth metadata. Keeping the
+// structure flat makes it cheap to hydrate and serialize in Silver while
+// preserving the behavior users expect from file trees and process trees.
+
+import std.mem.vec;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+
+struct TreeItem {
+    String label;
+    u16 depth;
+    bool has_children;
+    bool expanded;
+    Style style;
+}
+
+impl TreeItem {
+    TreeItem new(str label, u16 depth, bool has_children) {
+        TreeItem i;
+        i.label = String.from_str(label);
+        i.depth = depth;
+        i.has_children = has_children;
+        i.expanded = true;
+        i.style = Style.new();
+        return move i;
+    }
+
+    TreeItem style(TreeItem self, Style style) {
+        self.style = style;
+        return self;
+    }
+}
+
+struct TreeState {
+    i64 selected;
+    i64 offset;
+}
+
+impl TreeState {
+    TreeState new() {
+        TreeState s;
+        s.selected = 0;
+        s.offset = 0;
+        return s;
+    }
+
+    void select(&mut self, i64 index) {
+        self.selected = index;
+    }
+
+    void next(&mut self, i64 count) {
+        if (count <= 0) { self.selected = 0; return; }
+        self.selected = self.selected + 1;
+        if (self.selected >= count) { self.selected = 0; }
+    }
+
+    void previous(&mut self, i64 count) {
+        if (count <= 0) { self.selected = 0; return; }
+        self.selected = self.selected - 1;
+        if (self.selected < 0) { self.selected = count - 1; }
+    }
+}
+
+struct Tree {
+    Vec<TreeItem> items;
+    UpdateInterval cadence;
+    Style style;
+    Style highlight_style;
+    str branch_open;
+    str branch_closed;
+    str leaf_symbol;
+    Block block;
+    bool has_block;
+}
+
+impl Tree {
+    Tree new(Vec<TreeItem> items) {
+        Tree t;
+        t.items = move items;
+        t.cadence = UpdateInterval.new(0);
+        t.style = Style.new();
+        t.highlight_style = Style.new().reversed();
+        t.branch_open = "▾";
+        t.branch_closed = "▸";
+        t.leaf_symbol = "·";
+        t.block = Block.new();
+        t.has_block = false;
+        return move t;
+    }
+
+    Tree style(Tree self, Style style) {
+        self.style = style;
+        return self;
+    }
+
+    Tree highlight_style(Tree self, Style style) {
+        self.highlight_style = style;
+        return self;
+    }
+
+    Tree block(Tree self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return self;
+    }
+
+    Tree update_interval(Tree self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+
+    void toggle_selected(&mut self, &mut TreeState state) {
+        i64 visible = 0;
+        bool hidden = false;
+        u16 hidden_depth = 0;
+        for (i64 i = 0; i < self.items.len(); i = i + 1) {
+            TreeItem* item = self.items.get_ptr(i);
+            if (hidden) {
+                if (item.depth > hidden_depth) { continue; }
+                hidden = false;
+            }
+            if (visible == state.selected) {
+                if (item.has_children) { item.expanded = !item.expanded; }
+                return;
+            }
+            visible = visible + 1;
+            if (item.has_children && !item.expanded) {
+                hidden = true;
+                hidden_depth = item.depth;
+            }
+        }
+    }
+}
+
+impl StatefulWidget for Tree {
+    type State = TreeState;
+
+    void render(&self, &Rect area, &mut Buffer buf, &mut TreeState state) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) { return; }
+        i64 total = tree_visible_count(&self.items);
+        if (total <= 0) { state.selected = 0; state.offset = 0; return; }
+        if (state.selected < 0) { state.selected = 0; }
+        if (state.selected >= total) { state.selected = total - 1; }
+        i64 height = (i64)inner.height;
+        if (state.selected < state.offset) { state.offset = state.selected; }
+        if (state.selected >= state.offset + height) { state.offset = state.selected - height + 1; }
+        if (state.offset < 0) { state.offset = 0; }
+        i64 max_offset = total - height;
+        if (max_offset < 0) { max_offset = 0; }
+        if (state.offset > max_offset) { state.offset = max_offset; }
+
+        i64 visible = 0;
+        bool hidden = false;
+        u16 hidden_depth = 0;
+        i64 y = (i64)inner.y;
+        for (i64 i = 0; i < self.items.len() && y < (i64)inner.y + height; i = i + 1) {
+            TreeItem* item = self.items.get_ptr(i);
+            if (hidden) {
+                if (item.depth > hidden_depth) { continue; }
+                hidden = false;
+            }
+            if (visible >= state.offset) {
+                Style st = self.style.patch(item.style);
+                if (visible == state.selected) { st = st.patch(self.highlight_style); }
+                i64 x = (i64)inner.x;
+                for (i64 d = 0; d < (i64)item.depth; d = d + 1) {
+                    buf.set_string(x, y, "  ", st, 2);
+                    x = x + 2;
+                }
+                if (item.has_children) {
+                    if (item.expanded) {
+                        buf.set_string(x, y, self.branch_open, st, 1);
+                    } else {
+                        buf.set_string(x, y, self.branch_closed, st, 1);
+                    }
+                } else {
+                    buf.set_string(x, y, self.leaf_symbol, st, 1);
+                }
+                x = x + 2;
+                buf.set_string(x, y, item.label.to_str(), st, (i64)inner.x + (i64)inner.width - x);
+                y = y + 1;
+            }
+            visible = visible + 1;
+            if (item.has_children && !item.expanded) {
+                hidden = true;
+                hidden_depth = item.depth;
+            }
+        }
+    }
+}
+
+i64 tree_visible_count(&Vec<TreeItem> items) {
+    i64 count = 0;
+    bool hidden = false;
+    u16 hidden_depth = 0;
+    for (i64 i = 0; i < items.len(); i = i + 1) {
+        TreeItem* item = items.get_ptr(i);
+        if (hidden) {
+            if (item.depth > hidden_depth) { continue; }
+            hidden = false;
+        }
+        count = count + 1;
+        if (item.has_children && !item.expanded) {
+            hidden = true;
+            hidden_depth = item.depth;
+        }
+    }
+    return count;
+}

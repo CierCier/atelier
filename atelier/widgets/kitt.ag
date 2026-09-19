@@ -1,0 +1,135 @@
+// KittScanner: a Knight Rider-style light sweeping across a rendered Text.
+// The scanner owns the Paragraph that renders the supplied Text, then overlays
+// a hot column and a short trail without changing the underlying content.
+
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+import atelier.widgets.paragraph;
+
+struct KittScanner {
+    Paragraph content;
+    UpdateInterval cadence;
+    i64 position;
+    i64 trail;
+    Style hot_style;
+    Style trail_style;
+}
+
+impl KittScanner {
+    KittScanner new(Text text, i64 interval_ms) {
+        KittScanner k;
+        k.content = Paragraph.new(move text);
+        k.cadence = UpdateInterval.new(interval_ms);
+        k.position = 0;
+        k.trail = 3;
+        k.hot_style = Style.new().fg(Color.BrightRed).bold().reversed();
+        k.trail_style = Style.new().fg(Color.Red).dim();
+        return move k;
+    }
+
+    KittScanner block(KittScanner self, Block block) {
+        self.content = self.content.block(block);
+        return move self;
+    }
+
+    KittScanner style(KittScanner self, Style style) {
+        self.content = self.content.style(style);
+        return move self;
+    }
+
+    KittScanner hot_style(KittScanner self, Style style) {
+        self.hot_style = style;
+        return move self;
+    }
+
+    KittScanner trail_style(KittScanner self, Style style) {
+        self.trail_style = style;
+        return move self;
+    }
+
+    KittScanner trail(KittScanner self, i64 cells) {
+        self.trail = cells;
+        if (self.trail < 0) {
+            self.trail = 0;
+        }
+        return move self;
+    }
+
+    KittScanner update_interval(KittScanner self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return move self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    /// Move exactly one scanner frame, independent of the configured interval.
+    void step(&mut self) {
+        self.position = self.position + 1;
+    }
+
+    /// Advance according to elapsed time and return the number of frames moved.
+    i64 advance(&mut self, i64 elapsed_ms) {
+        i64 steps = self.cadence.advance(elapsed_ms);
+        for (i64 i = 0; i < steps; i = i + 1) {
+            self.step();
+        }
+        return steps;
+    }
+}
+
+impl Widget for KittScanner {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        self.content.render(area, buf);
+        Rect inner = *area;
+        if (self.content.has_block) {
+            inner = self.content.block.inner(*area);
+        }
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+        i64 width = (i64)inner.width;
+        i64 phase = self.position;
+        i64 scan_direction = 1;
+        if (width <= 1) {
+            phase = 0;
+        } else {
+            i64 period = (width - 1) * 2;
+            i64 cycle = self.position % period;
+            phase = cycle;
+            if (cycle >= width) {
+                phase = period - cycle;
+                scan_direction = -1;
+            }
+        }
+        for (i64 row = (i64)inner.y; row < (i64)inner.y + (i64)inner.height; row = row + 1) {
+            for (i64 offset = 0; offset <= self.trail; offset = offset + 1) {
+                i64 col = phase - offset * scan_direction;
+                if (col < 0 || col >= width) {
+                    continue;
+                }
+                Cell* cell = buf.cell_mut((i64)inner.x + col, row);
+                if (cell == (Cell*)0 || (cell.ch == (u32)0 && !cell.continuation)) {
+                    continue;
+                }
+                Style scan_style = self.trail_style;
+                if (offset == 0) {
+                    scan_style = self.hot_style;
+                }
+                if (cell.continuation) {
+                    Cell* lead = buf.cell_mut((i64)inner.x + col - 1, row);
+                    if (lead != (Cell*)0) {
+                        cell_apply(&mut *lead, scan_style);
+                    }
+                }
+                cell_apply(&mut *cell, scan_style);
+            }
+        }
+    }
+}

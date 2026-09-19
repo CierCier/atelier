@@ -1,0 +1,36 @@
+import atelier.widgets.chrome;
+import atelier.buffer;
+import atelier.layout;
+import atelier.text;
+import std.test;
+
+i32 main() {
+    test_start("status bar lays out keys left and status right");
+    StatusBar bar = StatusBar.new().item("q", "quit").right_text("run");
+    Rect area = Rect.new((u16)0, (u16)0, (u16)20, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    bar.render(&area, &buf);
+    assert_eq_i64(0x71, (i64)buf.cell_mut(1, 0).ch, "key cell holds 'q'");
+    assert_eq_i64(0x71, (i64)buf.cell_mut(3, 0).ch, "action starts with 'q'");
+    assert_eq_i64(0x6e, (i64)buf.cell_mut(19, 0).ch, "right label ends with 'n'");
+
+    test_start("hrule draws a labeled divider");
+    HRule rule = HRule.new().label("ab").alignment(Alignment.Center);
+    Rect rule_area = Rect.new((u16)0, (u16)0, (u16)10, (u16)1);
+    Buffer rule_buf = Buffer.empty(rule_area);
+    rule.render(&rule_area, &rule_buf);
+    assert_eq_i64(0x2500, (i64)rule_buf.cell_mut(0, 0).ch, "rule starts with ─");
+    assert_eq_i64(0x20, (i64)rule_buf.cell_mut(3, 0).ch, "label padded with space");
+    assert_eq_i64(0x61, (i64)rule_buf.cell_mut(4, 0).ch, "label centered");
+    assert_eq_i64(0x2500, (i64)rule_buf.cell_mut(9, 0).ch, "rule resumes after label");
+
+    test_start("hrule centers itself in tall areas");
+    HRule tall = HRule.new().label("ab").alignment(Alignment.Center);
+    Rect tall_area = Rect.new((u16)0, (u16)0, (u16)10, (u16)3);
+    Buffer tall_buf = Buffer.empty(tall_area);
+    tall.render(&tall_area, &tall_buf);
+    assert_eq_i64(0, (i64)tall_buf.cell_mut(0, 0).ch, "top row stays empty");
+    assert_eq_i64(0x2500, (i64)tall_buf.cell_mut(0, 1).ch, "rule sits mid-box");
+    assert_eq_i64(0x61, (i64)tall_buf.cell_mut(4, 1).ch, "label stays centered");
+    return done();
+}

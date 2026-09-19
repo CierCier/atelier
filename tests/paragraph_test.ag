@@ -55,5 +55,14 @@ i32 main() {
         String s1 = cell_string(&b, 0, 1, 6);
         assert_true(s1.equals("three "), "second visible");
     }
+    test_start("paragraph alignment affects rendering");
+    {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
+        Buffer b = Buffer.empty(a);
+        Text t = Text.from("x");
+        Paragraph p = Paragraph.new(move t).alignment(Alignment.Center);
+        p.render(&a, &b);
+        assert_eq_i64(120, (i64)b.cell_mut(3, 0).ch, "centered text");
+    }
     return done();
 }

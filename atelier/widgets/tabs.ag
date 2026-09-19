@@ -1,0 +1,198 @@
+// Tabs: a compact horizontal selector with externally-owned selection state.
+//
+// Tab titles are owned by TabItem. TabsState stores only navigation state so
+// the same widget can be rendered in a header while the application owns the
+// selected tab and persists it independently.
+
+import std.mem.vec;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+
+struct TabItem {
+    String title;
+    Style style;
+}
+
+impl TabItem {
+    TabItem new(str title) {
+        TabItem t;
+        t.title = String.from_str(title);
+        t.style = Style.new();
+        return move t;
+    }
+
+    TabItem styled(str title, Style style) {
+        TabItem t = TabItem.new(title);
+        t.style = style;
+        return move t;
+    }
+}
+
+struct TabsState {
+    i64 selected;
+    i64 offset;
+}
+
+impl TabsState {
+    TabsState new() {
+        TabsState s;
+        s.selected = 0;
+        s.offset = 0;
+        return s;
+    }
+
+    void select(&mut self, i64 index) {
+        self.selected = index;
+    }
+
+    void next(&mut self, i64 count) {
+        if (count <= 0) {
+            self.selected = 0;
+            return;
+        }
+        self.selected = self.selected + 1;
+        if (self.selected >= count) {
+            self.selected = 0;
+        }
+    }
+
+    void previous(&mut self, i64 count) {
+        if (count <= 0) {
+            self.selected = 0;
+            return;
+        }
+        self.selected = self.selected - 1;
+        if (self.selected < 0) {
+            self.selected = count - 1;
+        }
+    }
+}
+
+struct Tabs {
+    Vec<TabItem> items;
+    UpdateInterval cadence;
+    Style style;
+    Style selected_style;
+    str divider;
+    Block block;
+    bool has_block;
+}
+
+impl Tabs {
+    Tabs new(Vec<TabItem> items) {
+        Tabs t;
+        t.items = move items;
+        t.cadence = UpdateInterval.new(0);
+        t.style = Style.new();
+        t.selected_style = Style.new().reversed().bold();
+        t.divider = "  ";
+        t.block = Block.new();
+        t.has_block = false;
+        return move t;
+    }
+
+    Tabs style(Tabs self, Style style) {
+        self.style = style;
+        return move self;
+    }
+
+    Tabs selected_style(Tabs self, Style style) {
+        self.selected_style = style;
+        return move self;
+    }
+
+    Tabs divider(Tabs self, str divider) {
+        self.divider = divider;
+        return move self;
+    }
+
+    Tabs block(Tabs self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return move self;
+    }
+
+    i64 len(&self) {
+        return self.items.len();
+    }
+
+    Tabs update_interval(Tabs self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return move self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+}
+
+impl StatefulWidget for Tabs {
+    type State = TabsState;
+
+    void render(&self, &Rect area, &mut Buffer buf, &mut TabsState state) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+
+        i64 n = self.items.len();
+        if (n <= 0) {
+            state.selected = 0;
+            state.offset = 0;
+            return;
+        }
+        if (state.selected < 0) {
+            state.selected = 0;
+        }
+        if (state.selected >= n) {
+            state.selected = n - 1;
+        }
+        if (state.offset < 0) {
+            state.offset = 0;
+        }
+        if (state.offset > state.selected) {
+            state.offset = state.selected;
+        }
+
+        i64 x = (i64)inner.x;
+        i64 right = (i64)inner.x + (i64)inner.width;
+        i64 y = (i64)inner.y + (i64)inner.height / 2;
+        for (i64 i = state.offset; i < n; i = i + 1) {
+            TabItem* item = self.items.get_ptr(i);
+            i64 w = text_width(item.title.to_str()) + 2;
+            if (x + w > right) {
+                break;
+            }
+            Style st = self.style.patch(item.style);
+            if (i == state.selected) {
+                st = st.patch(self.selected_style);
+            }
+            buf.set_string(x, y, " ", st, 1);
+            buf.set_string(x + 1, y, item.title.to_str(), st, w - 2);
+            buf.set_string(x + w - 1, y, " ", st, 1);
+            x = x + w;
+            if (i + 1 < n) {
+                i64 divider_width = text_width(self.divider);
+                if (x + divider_width > right) {
+                    break;
+                }
+                buf.set_string(x, y, self.divider, self.style, divider_width);
+                x = x + divider_width;
+            }
+        }
+    }
+}

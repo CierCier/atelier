@@ -9,6 +9,7 @@ import atelier.buffer;
 import atelier.layout;
 import atelier.style;
 import atelier.text;
+import atelier.update;
 import atelier.widget;
 import atelier.widgets.block;
 
@@ -34,6 +35,7 @@ impl ListItem {
 
 struct List {
     Vec<ListItem> items;
+    UpdateInterval cadence;
     Style style;
     Style highlight_style;
     str highlight_symbol;
@@ -45,6 +47,7 @@ impl List {
     List new(Vec<ListItem> items) {
         List l;
         l.items = move items;
+        l.cadence = UpdateInterval.new(0);
         l.style = Style.new();
         l.highlight_style = Style.new().reversed();
         l.highlight_symbol = (str)0;
@@ -77,6 +80,19 @@ impl List {
     i64 len(&self) {
         return self.items.len();
     }
+
+    List update_interval(List self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return move self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
 }
 
 struct ListState {
@@ -104,7 +120,7 @@ impl ListState {
 impl StatefulWidget for List {
     type State = ListState;
 
-    void render(*self, Rect* area, Buffer* buf, ListState* state) {
+    void render(&self, &Rect area, &mut Buffer buf, &mut ListState state) {
         Rect inner = *area;
         if (self.has_block) {
             self.block.render(area, buf);
@@ -136,9 +152,16 @@ impl StatefulWidget for List {
         if (state.offset < 0) {
             state.offset = 0;
         }
+        i64 max_offset = n - h;
+        if (max_offset < 0) {
+            max_offset = 0;
+        }
+        if (state.offset > max_offset) {
+            state.offset = max_offset;
+        }
         i64 sym_w = 0;
         if (self.highlight_symbol != (str)0) {
-            sym_w = span_width_of(self.highlight_symbol);
+            sym_w = text_width(self.highlight_symbol);
         }
         for (i64 row = 0; row < h; row = row + 1) {
             i64 idx = state.offset + row;
@@ -163,20 +186,4 @@ impl StatefulWidget for List {
             buf.set_string(x, y, item.text.to_str(), st, max);
         }
     }
-}
-
-/// Cell width of a borrowed string (span helper without a Span value).
-i64 span_width_of(str text) {
-    if (text == (str)0) {
-        return 0;
-    }
-    u8* p = (u8*)text;
-    i64 len = cstr_len(p);
-    i64 idx = 0;
-    i64 w = 0;
-    while (idx < len) {
-        u32 cp = utf8_next(p, len, &idx);
-        w = w + (i64)char_width(cp);
-    }
-    return w;
 }

@@ -40,5 +40,15 @@ i32 main() {
         Rect* a = rs.get_ptr((i64)0);
         assert_eq_i64(5, (i64)a.x, "centered lead");
     }
+    test_start("max constraint keeps its cap");
+    {
+        Vec<Constraint> cs = cons2(Constraint.Max((u16)5), Constraint.Max((u16)5));
+        Layout l = Layout.new(Direction.Horizontal, move cs);
+        Vec<Rect> rs = l.split(Rect.new((u16)0, (u16)0, (u16)20, (u16)1));
+        Rect* a = rs.get_ptr((i64)0);
+        Rect* b = rs.get_ptr((i64)1);
+        assert_eq_i64(5, (i64)a.width, "first max capped");
+        assert_eq_i64(5, (i64)b.width, "last max capped");
+    }
     return done();
 }

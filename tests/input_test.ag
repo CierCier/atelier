@@ -1,0 +1,27 @@
+import atelier.widgets.input;
+import atelier.buffer;
+import atelier.layout;
+import std.test;
+
+i32 main() {
+    test_start("text input editing state");
+    TextInputState state = TextInputState.from("ab");
+    state.move_left();
+    state.insert("X");
+    assert_true(state.value.equals("aXb"), "insert at cursor");
+    state.backspace();
+    assert_true(state.value.equals("ab"), "backspace removes one codepoint");
+    state.home();
+    state.delete_forward();
+    assert_true(state.value.equals("b"), "forward delete");
+
+    test_start("text input renders prompt and cursor");
+    TextInput input = TextInput.new().prompt("$ ");
+    TextInputState rendered_state = TextInputState.from("ok");
+    Rect area = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    input.render(&area, &buf, &rendered_state);
+    assert_eq_i64(36, (i64)buf.cell_mut(0, 0).ch, "prompt first character");
+    assert_eq_i64(111, (i64)buf.cell_mut(2, 0).ch, "value follows prompt");
+    return done();
+}

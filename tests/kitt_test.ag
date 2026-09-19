@@ -1,0 +1,46 @@
+import atelier.widgets.kitt;
+import atelier.widgets.block;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import std.test;
+
+i32 main() {
+    test_start("scanner renders supplied text");
+    Text text = Text.from("hello");
+    KittScanner scanner = KittScanner.new(move text, 50);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)5, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    scanner.render(&area, &buf);
+    assert_eq_i64(104, (i64)buf.cell_mut(0, 0).ch, "text is delegated to paragraph");
+    Color red = Color.BrightRed;
+    assert_true(buf.cell_mut(0, 0).fg == red, "scanner styles the hot cell");
+
+    test_start("scanner moves at its interval");
+    assert_eq_i64(1, scanner.advance(50), "one scanner step");
+    buf.reset();
+    scanner.render(&area, &buf);
+    assert_eq_i64(101, (i64)buf.cell_mut(1, 0).ch, "text remains under the scan");
+    assert_true(buf.cell_mut(1, 0).fg == red, "hot cell moves right");
+
+    test_start("demo configuration across widths and long runs");
+    i64 widths[6] = { 0, 1, 2, 3, 40, 120 };
+    for (i64 w = 0; w < 6; w = w + 1) {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)widths[w], (u16)4);
+        Buffer b = Buffer.empty(a);
+        Text st = Text.from("BUILD READY  ·  WATCHING FILES");
+        KittScanner s = KittScanner.new(move st, 80)
+            .block(Block.new().title("status scanner"))
+            .trail(4);
+        // Fresh-scanner total-elapsed advance, exactly like the demo frame.
+        s.advance((w + 1) * 100000);
+        s.render(&a, &b);
+        for (i64 k = 0; k < 500; k = k + 1) {
+            s.step();
+        }
+        b.reset();
+        s.render(&a, &b);
+    }
+    return done();
+}

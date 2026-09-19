@@ -1,0 +1,48 @@
+// Shared update cadence for widgets with application-owned or intrinsic
+// changing data. An interval of zero means manual-only updates.
+
+struct UpdateInterval {
+    i64 interval_ms;
+    i64 elapsed_ms;
+}
+
+impl UpdateInterval {
+    UpdateInterval new(i64 interval_ms) {
+        UpdateInterval u;
+        u.interval_ms = interval_ms;
+        if (u.interval_ms < 0) {
+            u.interval_ms = 0;
+        }
+        u.elapsed_ms = 0;
+        return u;
+    }
+
+    UpdateInterval interval(UpdateInterval self, i64 interval_ms) {
+        self.interval_ms = interval_ms;
+        if (self.interval_ms < 0) {
+            self.interval_ms = 0;
+        }
+        self.elapsed_ms = 0;
+        return self;
+    }
+
+    i64 milliseconds(&self) {
+        return self.interval_ms;
+    }
+
+    /// Add elapsed time and return how many update boundaries were crossed.
+    /// A zero interval is manual-only and never becomes due automatically.
+    i64 advance(&mut self, i64 elapsed_ms) {
+        if (self.interval_ms <= 0 || elapsed_ms <= 0) {
+            return 0;
+        }
+        self.elapsed_ms = self.elapsed_ms + elapsed_ms;
+        i64 steps = self.elapsed_ms / self.interval_ms;
+        self.elapsed_ms = self.elapsed_ms % self.interval_ms;
+        return steps;
+    }
+
+    void reset(&mut self) {
+        self.elapsed_ms = 0;
+    }
+}

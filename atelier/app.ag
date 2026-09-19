@@ -13,12 +13,12 @@ import std.term;
 import atelier.terminal;
 
 trait App {
-    void init(*self);
+    void init(&mut self);
     /// Handle a key; return true to quit.
-    bool on_key(*self, KeyEvent* e);
+    bool on_key(&mut self, &KeyEvent e);
     /// Periodic hook; dt_ms is the elapsed time since the last tick.
-    void on_tick(*self, i64 dt_ms);
-    void render(*self, Frame* f);
+    void on_tick(&mut self, i64 dt_ms);
+    void render(&mut self, &mut Frame f);
     /// Tick interval in ms; 0 disables ticks (input-driven rendering).
     i64 tick_ms(*self);
 }
@@ -26,7 +26,7 @@ trait App {
 const i64 ESC_TIMEOUT_MS = 50;
 const i64 IDLE_SLEEP_MS = 5;
 
-void run_app<A>(A* app) {
+void run_app<A>(&mut A app) {
     if (!term_is_tty(0)) {
         STDOUT.write_str("run_app needs a terminal on stdin\n");
         STDOUT.flush();
@@ -101,8 +101,7 @@ void run_app<A>(A* app) {
             seq_open = false;
             KeyEvent e = o.unwrap();
             activity = true;
-            KeyEvent* ep = &e;
-            bool qr = app.on_key(ep);
+            bool qr = app.on_key(&e);
             if (qr) {
                 quit = true;
                 break;

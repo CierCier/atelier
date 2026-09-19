@@ -1,0 +1,40 @@
+import atelier;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.widget;
+import std.test;
+
+// Regression test for the update-loop crash: build and render every widget
+// in a tight loop the way the demo does per `u` press. Under --leak-check
+// any per-frame leak fails; a heap-corrupting overflow segfaults.
+i32 main() {
+    test_start("repeated updates do not leak or crash");
+    Rect area = Rect.new((u16)0, (u16)0, (u16)40, (u16)10);
+    for (i64 i = 0; i < 50; i = i + 1) {
+        Buffer buf = Buffer.empty(area);
+        Vec<ListItem> items = Vec<ListItem>.new();
+        items.push(ListItem.new("a"));
+        List l = List.new(move items);
+        ListState ls = ListState.new();
+        l.render(&area, &buf, &mut ls);
+        Vec<TableRow> rows = Vec<TableRow>.new();
+        Vec<TableCell> head = Vec<TableCell>.new();
+        head.push(TableCell.new("H"));
+        rows.push(TableRow.new(move head));
+        Table t = Table.new(move rows);
+        TableState ts = TableState.new();
+        t.render(&area, &buf, &mut ts);
+        Text st = Text.from("scan me");
+        KittScanner ks = KittScanner.new(move st, 80);
+        ks.advance(100);
+        ks.render(&area, &buf);
+        String msg = @format("update #{}", i);
+        Text mt = Text.from(msg.to_str());
+        Paragraph mp = Paragraph.new(move mt);
+        mp.render(&area, &buf);
+        msg.drop();
+    }
+    return done();
+}

@@ -1,0 +1,271 @@
+// LineChart: multi-series step-line plot with a labeled Y axis.
+//
+// Each series owns its points; the latest points right-align into the plot
+// width like Sparkline. Bounds auto-fit the visible data unless y_bounds
+// pins them. Points render as dots joined by vertical step runs.
+
+import std.mem.vec;
+import std.fmt;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+
+struct ChartSeries {
+    String label;
+    Vec<i64> points;
+    Style style;
+}
+
+impl ChartSeries {
+    ChartSeries new(str label) {
+        ChartSeries s;
+        s.label = String.from_str(label);
+        s.points = Vec<i64>.new();
+        s.style = Style.new();
+        return move s;
+    }
+
+    ChartSeries styled(str label, Style style) {
+        ChartSeries s = ChartSeries.new(label);
+        s.style = style;
+        return move s;
+    }
+
+    void push(&mut self, i64 value) {
+        self.points.push(value);
+    }
+
+    i64 len(&self) {
+        return self.points.len();
+    }
+}
+
+struct LineChart {
+    Vec<ChartSeries> series;
+    UpdateInterval cadence;
+    i64 y_min;
+    i64 y_max;
+    bool auto_bounds;
+    Style style;
+    Style axis_style;
+    Block block;
+    bool has_block;
+}
+
+impl LineChart {
+    LineChart new(Vec<ChartSeries> series) {
+        LineChart c;
+        c.series = move series;
+        c.cadence = UpdateInterval.new(0);
+        c.y_min = 0;
+        c.y_max = 100;
+        c.auto_bounds = true;
+        c.style = Style.new();
+        c.axis_style = Style.new().fg(Color.BrightBlack);
+        c.block = Block.new();
+        c.has_block = false;
+        return move c;
+    }
+
+    LineChart y_bounds(LineChart self, i64 min, i64 max) {
+        self.y_min = min;
+        self.y_max = max;
+        self.auto_bounds = false;
+        return move self;
+    }
+
+    LineChart style(LineChart self, Style style) {
+        self.style = style;
+        return move self;
+    }
+
+    LineChart axis_style(LineChart self, Style style) {
+        self.axis_style = style;
+        return move self;
+    }
+
+    LineChart block(LineChart self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return move self;
+    }
+
+    LineChart update_interval(LineChart self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return move self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+
+    i64 len(&self) {
+        return self.series.len();
+    }
+}
+
+impl Widget for LineChart {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+        // Resolve bounds: pinned, or fit to the visible data window.
+        i64 lo = self.y_min;
+        i64 hi = self.y_max;
+        if (self.auto_bounds) {
+            bool found = false;
+            lo = 0;
+            hi = 0;
+            for (i64 s = 0; s < self.series.len(); s = s + 1) {
+                ChartSeries* sr = self.series.get_ptr(s);
+                for (i64 i = 0; i < sr.points.len(); i = i + 1) {
+                    i64 v = sr.points.get(i);
+                    if (!found) {
+                        lo = v;
+                        hi = v;
+                        found = true;
+                    } else {
+                        if (v < lo) {
+                            lo = v;
+                        }
+                        if (v > hi) {
+                            hi = v;
+                        }
+                    }
+                }
+            }
+            if (!found) {
+                return;
+            }
+        }
+        if (hi < lo) {
+            i64 t = lo;
+            lo = hi;
+            hi = t;
+        }
+        // Axis gutter: width of the widest of the three tick labels.
+        String top_label = @format("{}", hi);
+        String mid_label = @format("{}", (hi + lo) / 2);
+        String bot_label = @format("{}", lo);
+        i64 gutter = text_width(top_label.to_str());
+        i64 mid_w = text_width(mid_label.to_str());
+        if (mid_w > gutter) {
+            gutter = mid_w;
+        }
+        i64 bot_w = text_width(bot_label.to_str());
+        if (bot_w > gutter) {
+            gutter = bot_w;
+        }
+        // Gutter labels plus one axis column and one gap column.
+        i64 plot_x = (i64)inner.x + gutter + 2;
+        i64 plot_w = (i64)inner.x + (i64)inner.width - plot_x;
+        i64 h = (i64)inner.height;
+        if (plot_w > 0 && h > 0) {
+            i64 axis_x = plot_x - 1;
+            for (i64 row = 0; row < h; row = row + 1) {
+                buf.set_string(axis_x, (i64)inner.y + row, "│", self.axis_style, 1);
+            }
+            buf.set_string((i64)inner.x, (i64)inner.y, top_label.to_str(), self.axis_style, gutter);
+            if (h > 2) {
+                buf.set_string((i64)inner.x, (i64)inner.y + h / 2, mid_label.to_str(), self.axis_style, gutter);
+            }
+            if (h > 1) {
+                buf.set_string((i64)inner.x, (i64)inner.y + h - 1, bot_label.to_str(), self.axis_style, gutter);
+            }
+        }
+        top_label.drop();
+        mid_label.drop();
+        bot_label.drop();
+        if (plot_w <= 0 || h <= 0) {
+            return;
+        }
+        for (i64 s = 0; s < self.series.len(); s = s + 1) {
+            ChartSeries* sr = self.series.get_ptr(s);
+            i64 n = sr.points.len();
+            if (n <= 0) {
+                continue;
+            }
+            // Latest points fill the plot: one point per column when data
+            // overflows, stretched across the full width otherwise.
+            i64 visible = n;
+            if (visible > plot_w) {
+                visible = plot_w;
+            }
+            i64 start = n - visible;
+            i64 prev_x = -1;
+            i64 prev_row = -1;
+            for (i64 i = start; i < n; i = i + 1) {
+                i64 v = sr.points.get(i);
+                i64 row = chart_row(v, lo, hi, h);
+                i64 x = plot_x + plot_w - 1;
+                if (visible > 1) {
+                    x = plot_x + (i - start) * (plot_w - 1) / (visible - 1);
+                }
+                if (x < plot_x || x >= plot_x + plot_w) {
+                    prev_x = x;
+                    prev_row = row;
+                    continue;
+                }
+                if (prev_x >= plot_x && prev_x < plot_x + plot_w && prev_row >= 0) {
+                    // Step segment: horizontal run, then vertical at x.
+                    i64 hx0 = prev_x;
+                    i64 hx1 = x;
+                    if (hx0 > hx1) {
+                        i64 t = hx0;
+                        hx0 = hx1;
+                        hx1 = t;
+                    }
+                    for (i64 hx = hx0 + 1; hx < hx1; hx = hx + 1) {
+                        buf.set_string(hx, (i64)inner.y + prev_row, "─", sr.style, 1);
+                    }
+                    if (prev_row != row) {
+                        i64 from = prev_row;
+                        i64 to = row;
+                        if (from > to) {
+                            i64 t = from;
+                            from = to;
+                            to = t;
+                        }
+                        for (i64 r = from + 1; r < to; r = r + 1) {
+                            buf.set_string(x, (i64)inner.y + r, "│", sr.style, 1);
+                        }
+                    }
+                }
+                buf.set_string(x, (i64)inner.y + row, "•", sr.style, 1);
+                prev_x = x;
+                prev_row = row;
+            }
+        }
+    }
+}
+
+/// Map a value to a plot row: 0 is the top, h - 1 the bottom.
+i64 chart_row(i64 value, i64 lo, i64 hi, i64 h) {
+    if (h <= 1) {
+        return 0;
+    }
+    if (hi <= lo) {
+        return h - 1;
+    }
+    if (value < lo) {
+        value = lo;
+    }
+    if (value > hi) {
+        value = hi;
+    }
+    return (hi - value) * (h - 1) / (hi - lo);
+}

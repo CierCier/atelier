@@ -1,0 +1,128 @@
+// Scrollbar: a standalone vertical position indicator. It intentionally
+// consumes a caller-provided rectangle so lists, logs, trees, and tables can
+// reserve their own gutter without a container hierarchy.
+
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+
+struct ScrollbarState {
+    i64 content_length;
+    i64 position;
+}
+
+impl ScrollbarState {
+    ScrollbarState new(i64 content_length) {
+        ScrollbarState s;
+        s.content_length = content_length;
+        s.position = 0;
+        return s;
+    }
+
+    void set_position(&mut self, i64 position) {
+        self.position = position;
+    }
+
+    void set_content_length(&mut self, i64 length) {
+        self.content_length = length;
+    }
+}
+
+struct Scrollbar {
+    UpdateInterval cadence;
+    Style track_style;
+    Style thumb_style;
+    str track_symbol;
+    str thumb_symbol;
+    Block block;
+    bool has_block;
+}
+
+impl Scrollbar {
+    Scrollbar new() {
+        Scrollbar s;
+        s.cadence = UpdateInterval.new(0);
+        s.track_style = Style.new().fg(Color.BrightBlack);
+        s.thumb_style = Style.new().fg(Color.White);
+        s.track_symbol = "░";
+        s.thumb_symbol = "█";
+        s.block = Block.new();
+        s.has_block = false;
+        return s;
+    }
+
+    Scrollbar track_style(Scrollbar self, Style style) {
+        self.track_style = style;
+        return self;
+    }
+
+    Scrollbar thumb_style(Scrollbar self, Style style) {
+        self.thumb_style = style;
+        return self;
+    }
+
+    Scrollbar symbols(Scrollbar self, str track, str thumb) {
+        self.track_symbol = track;
+        self.thumb_symbol = thumb;
+        return self;
+    }
+
+    Scrollbar block(Scrollbar self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return self;
+    }
+
+    Scrollbar update_interval(Scrollbar self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+}
+
+impl StatefulWidget for Scrollbar {
+    type State = ScrollbarState;
+
+    void render(&self, &Rect area, &mut Buffer buf, &mut ScrollbarState state) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+        i64 height = (i64)inner.height;
+        i64 content = state.content_length;
+        if (content < 1) { content = 1; }
+        i64 viewport = height;
+        i64 thumb = height * viewport / content;
+        if (thumb < 1) { thumb = 1; }
+        if (thumb > height) { thumb = height; }
+        i64 max_position = content - viewport;
+        if (max_position < 0) { max_position = 0; }
+        i64 position = state.position;
+        if (position < 0) { position = 0; }
+        if (position > max_position) { position = max_position; }
+        i64 travel = height - thumb;
+        i64 top = 0;
+        if (max_position > 0) { top = position * travel / max_position; }
+        for (i64 row = 0; row < height; row = row + 1) {
+            if (row >= top && row < top + thumb) {
+                buf.set_string((i64)inner.x, (i64)inner.y + row, self.thumb_symbol, self.thumb_style, 1);
+            } else {
+                buf.set_string((i64)inner.x, (i64)inner.y + row, self.track_symbol, self.track_style, 1);
+            }
+        }
+    }
+}

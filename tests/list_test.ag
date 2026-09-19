@@ -53,5 +53,16 @@ i32 main() {
         l.render(&a, &b, &st);
         assert_eq_i64(-1, st.selected, "stays unselected");
     }
+    test_start("hydrated offset is normalized");
+    {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)8, (u16)2);
+        Buffer b = Buffer.empty(a);
+        List l = List.new(three_items());
+        ListState st = ListState.new();
+        st.selected = -1;
+        st.offset = 99;
+        l.render(&a, &b, &st);
+        assert_eq_i64(1, st.offset, "offset clamps to the last page");
+    }
     return done();
 }

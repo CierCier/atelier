@@ -16,14 +16,30 @@ atelier/
   layout.ag          Rect, Constraint, Flex, deterministic Layout solver
   buffer.ag          retained Cell grid, ranges, frame diffing
   widget.ag          Widget / StatefulWidget protocols
+  update.ag          elapsed-time update intervals
   terminal.ag        double-buffered Terminal + SGR backend over std.term
   widgets/
-    block.ag         borders, titles
+    block.ag         borders, titles, padding
     paragraph.ag     word wrap, scroll, alignment
     list.ag          selectable items, highlight, scroll window
+    tabs.ag          horizontal tab navigation
+    gauge.ag         gauges, line gauges, sparklines, bar charts, spinners
+    chart.ag         multi-series step-line charts with axes
+    chrome.ag        status key-hint bars, labeled dividers
+    overlay.ag       region clear + centered popup rects
+    table.ag         columns, headers, selection, scrolling
+    scrollbar.ag     standalone position gutter
+    tree.ag          expandable flat preorder trees
+    input.ag         single-line editor state and cursor
+    diff.ag          semantic review/diff lines
+    kitt.ag          scanning Text overlay with cadence
 tests/               `agc test` suites (one file per module)
 examples/
-  demo.ag            interactive showcase (list navigation + detail pane)
+  demo.ag            interactive showcase for every widget (list navigation,
+                       realistic app previews, IBM Carbon / Tokyo Night /
+                       Dracula themes; 100ms poll drives animations, `p`
+                       play/pauses, `u` steps one frame, `t` cycles theme,
+                       `b` flashes changed regions)
 ```
 
 ## Use
@@ -67,9 +83,29 @@ local checkout for that purpose.
   marks are skipped, wide chars advance two cells.
 - **Text borrows, `Text` owns**: spans are non-owning views; `Text` keeps
   backing `String`s whose buffers never move under `Vec` growth.
-- **Full redraw per frame**: after `flush`, the back buffer keeps stale
-  content, so the application re-renders everything; untouched cells diff
-  clean. `clear()` resets both buffers and the screen together.
+- **Full redraw per frame**: `frame()` clears the back buffer before widgets
+  render, so shrinking text or changing panes cannot leak stale cells.
+  `refresh()`/`clear()` reset both buffers and the screen together.
+- **Dirty-region flashes**: the demo's optional update flash targets only the
+  list, preview, header, or footer rectangles changed by the event.
+- **Interactive previews**: a 100ms poll advances gauges, charts, tabs,
+  spinners, table state, scroll position, tree expansion, input cursor, and
+  diff content so stateful widgets are shown changing rather than as static
+  samples. `p` play/pauses, `u` steps a single frame, `t` cycles the theme.
+- **State stays external**: selection, scrolling, and editor cursor state use
+  `StatefulWidget`, so persistence and navigation policies remain application
+  owned rather than hidden inside a renderer.
+- **Reference-driven components**: the widget set covers the repeated
+  surfaces found in btop, Pi, Grok Build, OpenCode, and Hermes—chrome,
+  selectors, metrics, tables, trees, editors, scrollbars, and diffs—without
+  importing their app-specific event or agent layers.
+- **Borrowed rendering**: widget and app entry points take `&`/`&mut`
+  refs. Raw pointers remain only where they mean something: nullable
+  lookups (`cell_mut`), `u8*` byte buffers and FFI, `Vec` storage and
+  element access, and signatures dictated by `std` traits.
+- **Fill the box**: backgrounds paint the whole inner area; meters fill
+  every row, single-row chrome (spinner, tabs, rules) centers vertically,
+  and bars resolve 1/8-cell fractional tips (`▏`–`▉`).
 - **Temporaries cannot be borrowed**: compare enums against bound locals,
   never literals (`Color red = Color.Red; ... != red`).
 - **`match` is an expression**: all arms must yield one type; solver logic

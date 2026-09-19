@@ -57,7 +57,7 @@ void write_codepoint(BufWriter* out, u32 cp) {
     }
 }
 
-void term_write_fg(BufWriter* out, Color* c) {
+void term_write_fg(BufWriter* out, &Color c) {
     match *c {
         Black : { term_set_fg(out, TERM_BLACK); },
         Red : { term_set_fg(out, TERM_RED); },
@@ -81,7 +81,7 @@ void term_write_fg(BufWriter* out, Color* c) {
     }
 }
 
-void term_write_bg(BufWriter* out, Color* c) {
+void term_write_bg(BufWriter* out, &Color c) {
     match *c {
         Black : { term_set_bg(out, TERM_BLACK); },
         Red : { term_set_bg(out, TERM_RED); },
@@ -144,7 +144,7 @@ void term_write_mods(BufWriter* out, u16 mods) {
 
 /// Full style re-emit from a reset baseline (always correct, slightly
 /// verbose; the diff layer ensures it only runs on real changes).
-void term_write_style(BufWriter* out, Style* s) {
+void term_write_style(BufWriter* out, &Style s) {
     term_sgr_reset(out);
     term_write_fg(out, &s.fg);
     term_write_bg(out, &s.bg);
@@ -179,7 +179,11 @@ impl Terminal {
         return Terminal.new(out, Rect.new((u16)0, (u16)0, (u16)cols, (u16)rows));
     }
 
-    Frame frame(*self) {
+    /// Start a fresh frame. Widgets are immediate-mode: every cell must be
+    /// resolved from the current application state, never inherited from an
+    /// older frame.
+    Frame frame(&mut self) {
+        self.cur.reset();
         Frame f;
         f.buf = &self.cur;
         f.area = self.area;
@@ -205,6 +209,12 @@ impl Terminal {
             CellUpdate* u = d.get_ptr(i);
             i64 x = (i64)u.x;
             i64 y = (i64)u.y;
+            // The continuation cell is metadata for the preceding wide glyph,
+            // not a second terminal cell. Skip it before cursor/style work so
+            // it cannot insert a redundant cursor move between adjacent text.
+            if (u.cell.continuation) {
+                continue;
+            }
             if (x != self.pen_x || y != self.pen_y) {
                 term_move_to(self.out, y + 1, x + 1);
             }
@@ -222,7 +232,19 @@ impl Terminal {
                 ch = (u32)32;
             }
             write_codepoint(self.out, ch);
-            self.pen_x = x + 1;
+            Cell* next = self.cur.cell_mut(x + 1, y);
+            bool wide = next != (Cell*)0 && next.continuation;
+            Cell* old_next = self.prev.cell_mut(x + 1, y);
+            bool old_wide = old_next != (Cell*)0 && old_next.continuation;
+            if (wide) {
+                self.pen_x = x + 2;
+            } else if (old_wide) {
+                // Replacing a wide glyph needs to erase its former trailer.
+                write_codepoint(self.out, (u32)32);
+                self.pen_x = x + 2;
+            } else {
+                self.pen_x = x + 1;
+            }
             self.pen_y = y;
         }
         self.out.flush();
@@ -243,12 +265,19 @@ impl Terminal {
         self.pen_y = -1;
     }
 
+    /// Invalidate the terminal after an external screen change. The next
+    /// frame is rendered from an empty baseline.
+    void refresh(&mut self) {
+        self.clear();
+    }
+
     /// Resize both buffers, forgetting contents.
     void resize(&mut self, i64 cols, i64 rows) {
         Rect a = Rect.new((u16)0, (u16)0, (u16)cols, (u16)rows);
         self.area = a;
         self.cur.resize(a);
         self.prev.resize(a);
+        self.pen = Style.new();
         self.pen_x = -1;
         self.pen_y = -1;
     }

@@ -1,0 +1,42 @@
+import atelier.widgets.chart;
+import atelier.buffer;
+import atelier.layout;
+import std.test;
+
+i32 main() {
+    test_start("line chart draws axis and series dots");
+    Vec<ChartSeries> series = Vec<ChartSeries>.new();
+    ChartSeries cpu = ChartSeries.new("cpu");
+    cpu.push(0);
+    cpu.push(50);
+    cpu.push(100);
+    series.push(move cpu);
+    LineChart chart = LineChart.new(move series).y_bounds(0, 100);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)10, (u16)4);
+    Buffer buf = Buffer.empty(area);
+    chart.render(&area, &buf);
+    assert_eq_i64(0x2502, (i64)buf.cell_mut(4, 0).ch, "axis column drawn");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(9, 0).ch, "max value at top row");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(5, 3).ch, "window stretches to full width");
+    assert_eq_i64(0x2500, (i64)buf.cell_mut(6, 3).ch, "step runs join points");
+    assert_eq_i64(0x2502, (i64)buf.cell_mut(7, 2).ch, "steps rise vertically");
+    assert_eq_i64(49, (i64)buf.cell_mut(0, 0).ch, "axis top label starts with '1'");
+
+    test_start("line chart tolerates empty and tiny areas");
+    Vec<ChartSeries> empty = Vec<ChartSeries>.new();
+    LineChart blank = LineChart.new(move empty);
+    Rect tiny = Rect.new((u16)0, (u16)0, (u16)3, (u16)1);
+    Buffer tiny_buf = Buffer.empty(tiny);
+    blank.render(&tiny, &tiny_buf);
+    Vec<ChartSeries> one = Vec<ChartSeries>.new();
+    ChartSeries flat = ChartSeries.new("flat");
+    flat.push(7);
+    flat.push(7);
+    one.push(move flat);
+    LineChart flat_chart = LineChart.new(move one);
+    Rect flat_area = Rect.new((u16)0, (u16)0, (u16)8, (u16)3);
+    Buffer flat_buf = Buffer.empty(flat_area);
+    flat_chart.render(&flat_area, &flat_buf);
+    assert_eq_i64(0x2022, (i64)flat_buf.cell_mut(7, 2).ch, "flat auto-bounds land on bottom row");
+    return done();
+}

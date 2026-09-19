@@ -1,0 +1,152 @@
+// DiffView: compact review output for edits, patches, and command previews.
+// Lines keep their semantic kind so applications can theme additions and
+// removals without embedding ANSI sequences in their data.
+
+import std.mem.vec;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+
+enum DiffKind {
+    Context;
+    Added;
+    Removed;
+    Hunk;
+    File;
+}
+
+struct DiffLine {
+    String text;
+    DiffKind kind;
+    Style style;
+}
+
+impl DiffLine {
+    DiffLine new(str text, DiffKind kind) {
+        DiffLine l;
+        l.text = String.from_str(text);
+        l.kind = kind;
+        l.style = Style.new();
+        return move l;
+    }
+
+    DiffLine styled(str text, DiffKind kind, Style style) {
+        DiffLine l = DiffLine.new(text, kind);
+        l.style = style;
+        return move l;
+    }
+}
+
+struct DiffView {
+    Vec<DiffLine> lines;
+    UpdateInterval cadence;
+    Style style;
+    Style added_style;
+    Style removed_style;
+    Style hunk_style;
+    Style file_style;
+    Block block;
+    bool has_block;
+}
+
+impl DiffView {
+    DiffView new(Vec<DiffLine> lines) {
+        DiffView d;
+        d.lines = move lines;
+        d.cadence = UpdateInterval.new(0);
+        d.style = Style.new();
+        d.added_style = Style.new().fg(Color.Green);
+        d.removed_style = Style.new().fg(Color.Red);
+        d.hunk_style = Style.new().fg(Color.Cyan);
+        d.file_style = Style.new().bold();
+        d.block = Block.new();
+        d.has_block = false;
+        return move d;
+    }
+
+    DiffView style(DiffView self, Style style) {
+        self.style = style;
+        return self;
+    }
+
+    DiffView added_style(DiffView self, Style style) {
+        self.added_style = style;
+        return self;
+    }
+
+    DiffView removed_style(DiffView self, Style style) {
+        self.removed_style = style;
+        return self;
+    }
+
+    DiffView hunk_style(DiffView self, Style style) {
+        self.hunk_style = style;
+        return self;
+    }
+
+    DiffView file_style(DiffView self, Style style) {
+        self.file_style = style;
+        return self;
+    }
+
+    DiffView block(DiffView self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return self;
+    }
+
+    DiffView update_interval(DiffView self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+}
+
+impl Widget for DiffView {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        i64 height = (i64)inner.height;
+        i64 start = 0;
+        if (self.lines.len() > height) {
+            start = self.lines.len() - height;
+        }
+        i64 y = (i64)inner.y;
+        for (i64 i = start; i < self.lines.len() && y < (i64)inner.y + height; i = i + 1) {
+            DiffLine* line = self.lines.get_ptr(i);
+            Style st = self.style.patch(line.style);
+            str prefix = " ";
+            if (line.kind == DiffKind.Added) {
+                prefix = "+";
+                st = st.patch(self.added_style);
+            } else if (line.kind == DiffKind.Removed) {
+                prefix = "-";
+                st = st.patch(self.removed_style);
+            } else if (line.kind == DiffKind.Hunk) {
+                prefix = "@";
+                st = st.patch(self.hunk_style);
+            } else if (line.kind == DiffKind.File) {
+                prefix = "#";
+                st = st.patch(self.file_style);
+            }
+            buf.set_string((i64)inner.x, y, prefix, st, 1);
+            buf.set_string((i64)inner.x + 1, y, line.text.to_str(), st, (i64)inner.width - 1);
+            y = y + 1;
+        }
+    }
+}

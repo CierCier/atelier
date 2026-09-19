@@ -1,0 +1,602 @@
+// Gauge and Sparkline: compact numeric visualizations used by dashboards,
+// status bars, resource monitors, and agent progress surfaces.
+
+import std.mem.vec;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+
+struct Gauge {
+    u16 percent;
+    UpdateInterval cadence;
+    str label;
+    Style style;
+    Style filled_style;
+    Style empty_style;
+    Block block;
+    bool has_block;
+}
+
+impl Gauge {
+    Gauge new() {
+        Gauge g;
+        g.percent = 0;
+        g.cadence = UpdateInterval.new(0);
+        g.label = (str)0;
+        g.style = Style.new();
+        g.filled_style = Style.new().fg(Color.Green);
+        g.empty_style = Style.new().fg(Color.BrightBlack);
+        g.block = Block.new();
+        g.has_block = false;
+        return g;
+    }
+
+    Gauge percent(Gauge self, u16 percent) {
+        self.percent = percent;
+        if (self.percent > (u16)100) {
+            self.percent = (u16)100;
+        }
+        return self;
+    }
+
+    Gauge label(Gauge self, str label) {
+        self.label = label;
+        return self;
+    }
+
+    Gauge style(Gauge self, Style style) {
+        self.style = style;
+        return self;
+    }
+
+    Gauge filled_style(Gauge self, Style style) {
+        self.filled_style = style;
+        return self;
+    }
+
+    Gauge empty_style(Gauge self, Style style) {
+        self.empty_style = style;
+        return self;
+    }
+
+    Gauge block(Gauge self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return self;
+    }
+
+    Gauge update_interval(Gauge self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+}
+
+impl Widget for Gauge {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+        i64 width = (i64)inner.width;
+        i64 height = (i64)inner.height;
+        i64 filled = width * (i64)self.percent / 100;
+        i64 eighth = (width * (i64)self.percent - filled * 100) * 8 / 100;
+        for (i64 row = 0; row < height; row = row + 1) {
+            i64 y = (i64)inner.y + row;
+            for (i64 col = 0; col < width; col = col + 1) {
+                if (col < filled) {
+                    buf.set_string((i64)inner.x + col, y, "█", self.filled_style, 1);
+                } else if (col == filled && eighth > 0) {
+                    buf.set_string((i64)inner.x + col, y, hbar_tip(eighth), self.filled_style, 1);
+                } else {
+                    buf.set_string((i64)inner.x + col, y, "░", self.empty_style, 1);
+                }
+            }
+        }
+        if (self.label != (str)0) {
+            i64 label_width = text_width(self.label);
+            i64 x = (i64)inner.x + (width - label_width) / 2;
+            if (x < (i64)inner.x) {
+                x = (i64)inner.x;
+            }
+            i64 label_y = (i64)inner.y + height / 2;
+            buf.set_string(x, label_y, self.label, self.style.bold(), width - (x - (i64)inner.x));
+        }
+    }
+}
+
+struct Sparkline {
+    Vec<u16> values;
+    UpdateInterval cadence;
+    u16 max_value;
+    Style style;
+    Block block;
+    bool has_block;
+}
+
+struct BarItem {
+    String label;
+    u16 value;
+    Style style;
+}
+
+impl BarItem {
+    BarItem new(str label, u16 value) {
+        BarItem b;
+        b.label = String.from_str(label);
+        b.value = value;
+        b.style = Style.new();
+        return move b;
+    }
+
+    BarItem styled(str label, u16 value, Style style) {
+        BarItem b = BarItem.new(label, value);
+        b.style = style;
+        return move b;
+    }
+}
+
+struct BarChart {
+    Vec<BarItem> items;
+    UpdateInterval cadence;
+    u16 max_value;
+    Style style;
+    Style bar_style;
+    Style empty_style;
+    Block block;
+    bool has_block;
+}
+
+impl BarChart {
+    BarChart new(Vec<BarItem> items) {
+        BarChart b;
+        b.items = move items;
+        b.cadence = UpdateInterval.new(0);
+        b.max_value = 0;
+        b.style = Style.new();
+        b.bar_style = Style.new().fg(Color.Blue);
+        b.empty_style = Style.new().fg(Color.BrightBlack);
+        b.block = Block.new();
+        b.has_block = false;
+        return move b;
+    }
+
+    BarChart max_value(BarChart self, u16 max_value) {
+        self.max_value = max_value;
+        return self;
+    }
+
+    BarChart style(BarChart self, Style style) {
+        self.style = style;
+        return self;
+    }
+
+    BarChart bar_style(BarChart self, Style style) {
+        self.bar_style = style;
+        return self;
+    }
+
+    BarChart empty_style(BarChart self, Style style) {
+        self.empty_style = style;
+        return self;
+    }
+
+    BarChart block(BarChart self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return self;
+    }
+
+    BarChart update_interval(BarChart self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+}
+
+impl Widget for BarChart {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) { return; }
+        i64 n = self.items.len();
+        if (n <= 0) { return; }
+        u16 max_value = self.max_value;
+        if (max_value == (u16)0) {
+            max_value = 1;
+            for (i64 i = 0; i < n; i = i + 1) {
+                BarItem* item = self.items.get_ptr(i);
+                if (item.value > max_value) { max_value = item.value; }
+            }
+        }
+        i64 label_width = 1;
+        for (i64 i = 0; i < n; i = i + 1) {
+            BarItem* item = self.items.get_ptr(i);
+            i64 w = text_width(item.label.to_str());
+            if (w > label_width) { label_width = w; }
+        }
+        i64 bar_width = (i64)inner.width - label_width - 1;
+        if (bar_width < 1) { bar_width = 1; }
+        i64 rows = n;
+        if (rows > (i64)inner.height) { rows = (i64)inner.height; }
+        for (i64 row = 0; row < rows; row = row + 1) {
+            BarItem* item = self.items.get_ptr(row);
+            i64 y = (i64)inner.y + row;
+            buf.set_string((i64)inner.x, y, item.label.to_str(), item.style, label_width);
+            i64 filled = bar_width * (i64)item.value / (i64)max_value;
+            if (filled > bar_width) { filled = bar_width; }
+            i64 eighth = (bar_width * (i64)item.value - filled * (i64)max_value) * 8 / (i64)max_value;
+            for (i64 col = 0; col < bar_width; col = col + 1) {
+                Style st = self.empty_style;
+                str glyph = "█";
+                if (col < filled) {
+                    st = self.bar_style.patch(item.style);
+                } else if (col == filled && eighth > 0) {
+                    glyph = hbar_tip(eighth);
+                    st = self.bar_style.patch(item.style);
+                }
+                buf.set_string((i64)inner.x + label_width + 1 + col, y, glyph, st, 1);
+            }
+        }
+    }
+}
+
+struct Spinner {
+    i64 frame;
+    UpdateInterval cadence;
+    str label;
+    Style style;
+}
+
+impl Spinner {
+    Spinner new(str label) {
+        Spinner s;
+        s.frame = 0;
+        s.cadence = UpdateInterval.new(0);
+        s.label = label;
+        s.style = Style.new();
+        return s;
+    }
+
+    Spinner style(Spinner self, Style style) {
+        self.style = style;
+        return self;
+    }
+
+    Spinner update_interval(Spinner self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        i64 steps = self.cadence.advance(elapsed_ms);
+        for (i64 i = 0; i < steps; i = i + 1) {
+            self.next();
+        }
+        return steps;
+    }
+
+    void next(&mut self) {
+        self.frame = self.frame + 1;
+        if (self.frame >= 10) { self.frame = 0; }
+    }
+}
+
+impl Widget for Spinner {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        if (area.width == (u16)0 || area.height == (u16)0) { return; }
+        i64 y = (i64)area.y + (i64)area.height / 2;
+        buf.set_string((i64)area.x, y, spinner_frame(self.frame), self.style, (i64)area.width);
+        if (self.label != (str)0) {
+            buf.set_string((i64)area.x + 2, y, self.label, self.style, (i64)area.width - 2);
+        }
+    }
+}
+
+impl Sparkline {
+    Sparkline new(Vec<u16> values) {
+        Sparkline s;
+        s.values = move values;
+        s.cadence = UpdateInterval.new(0);
+        s.max_value = 0;
+        s.style = Style.new();
+        s.block = Block.new();
+        s.has_block = false;
+        return move s;
+    }
+
+    Sparkline max_value(Sparkline self, u16 max_value) {
+        self.max_value = max_value;
+        return self;
+    }
+
+    Sparkline style(Sparkline self, Style style) {
+        self.style = style;
+        return self;
+    }
+
+    Sparkline block(Sparkline self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return self;
+    }
+
+    void push(&mut self, u16 value) {
+        self.values.push(value);
+    }
+
+    Sparkline update_interval(Sparkline self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+}
+
+impl Widget for Sparkline {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+        i64 n = self.values.len();
+        if (n <= 0) {
+            return;
+        }
+        i64 start = n - (i64)inner.width;
+        if (start < 0) {
+            start = 0;
+        }
+        u16 max_value = self.max_value;
+        if (max_value == (u16)0) {
+            max_value = 1;
+            for (i64 i = 0; i < n; i = i + 1) {
+                u16 value = self.values.get(i);
+                if (value > max_value) {
+                    max_value = value;
+                }
+            }
+        }
+        i64 x = (i64)inner.x + ((i64)inner.width - (n - start));
+        for (i64 i = start; i < n; i = i + 1) {
+            u16 value = self.values.get(i);
+            i64 level = (i64)value * 8 / (i64)max_value;
+            if (level > 8) {
+                level = 8;
+            }
+            buf.set_string(x, (i64)inner.y + (i64)inner.height - 1, spark_level(level), self.style, 1);
+            x = x + 1;
+        }
+    }
+}
+
+str spark_level(i64 level) {
+    if (level <= 0) { return " "; }
+    if (level == 1) { return "▁"; }
+    if (level == 2) { return "▂"; }
+    if (level == 3) { return "▃"; }
+    if (level == 4) { return "▄"; }
+    if (level == 5) { return "▅"; }
+    if (level == 6) { return "▆"; }
+    if (level == 7) { return "▇"; }
+    return "█";
+}
+
+str hbar_tip(i64 eighth) {
+    if (eighth <= 0) { return " "; }
+    if (eighth == 1) { return "▏"; }
+    if (eighth == 2) { return "▎"; }
+    if (eighth == 3) { return "▍"; }
+    if (eighth == 4) { return "▌"; }
+    if (eighth == 5) { return "▋"; }
+    if (eighth == 6) { return "▊"; }
+    if (eighth == 7) { return "▉"; }
+    return "█";
+}
+
+str spinner_frame(i64 frame) {
+    if (frame == 0) { return "⠋"; }
+    if (frame == 1) { return "⠙"; }
+    if (frame == 2) { return "⠹"; }
+    if (frame == 3) { return "⠸"; }
+    if (frame == 4) { return "⠼"; }
+    if (frame == 5) { return "⠴"; }
+    if (frame == 6) { return "⠦"; }
+    if (frame == 7) { return "⠧"; }
+    if (frame == 8) { return "⠇"; }
+    return "⠏";
+}
+
+// LineGauge: a single-row meter for tight status rows where Gauge is too
+// tall. Renders `████░░░░ 62%`: a hairline bar plus a numeric suffix.
+
+struct LineGauge {
+    i64 num;
+    i64 den;
+    UpdateInterval cadence;
+    str label;
+    Style style;
+    Style filled_style;
+    Style empty_style;
+    Block block;
+    bool has_block;
+}
+
+impl LineGauge {
+    LineGauge new() {
+        LineGauge g;
+        g.num = 0;
+        g.den = 100;
+        g.cadence = UpdateInterval.new(0);
+        g.label = (str)0;
+        g.style = Style.new();
+        g.filled_style = Style.new().fg(Color.Green);
+        g.empty_style = Style.new().fg(Color.BrightBlack);
+        g.block = Block.new();
+        g.has_block = false;
+        return g;
+    }
+
+    LineGauge ratio(LineGauge self, i64 num, i64 den) {
+        self.num = num;
+        self.den = den;
+        return self;
+    }
+
+    LineGauge label(LineGauge self, str label) {
+        self.label = label;
+        return self;
+    }
+
+    LineGauge style(LineGauge self, Style style) {
+        self.style = style;
+        return self;
+    }
+
+    LineGauge filled_style(LineGauge self, Style style) {
+        self.filled_style = style;
+        return self;
+    }
+
+    LineGauge empty_style(LineGauge self, Style style) {
+        self.empty_style = style;
+        return self;
+    }
+
+    LineGauge block(LineGauge self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return self;
+    }
+
+    LineGauge update_interval(LineGauge self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+
+    i64 percent(&self) {
+        if (self.den <= 0) {
+            return 0;
+        }
+        i64 p = self.num * 100 / self.den;
+        if (p < 0) {
+            p = 0;
+        }
+        if (p > 100) {
+            p = 100;
+        }
+        return p;
+    }
+}
+
+impl Widget for LineGauge {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+        i64 x = (i64)inner.x;
+        i64 lw = 0;
+        if (self.label != (str)0) {
+            lw = text_width(self.label);
+            if (lw > (i64)inner.width) {
+                lw = (i64)inner.width;
+            }
+            x = x + lw + 1;
+        }
+        // " 100%" suffix reserves 5 cells when there is room for a bar.
+        i64 rest = (i64)inner.x + (i64)inner.width - x;
+        i64 bar = rest;
+        bool show_pct = false;
+        if (rest > 6) {
+            bar = rest - 5;
+            show_pct = true;
+        }
+        if (bar < 0) {
+            bar = 0;
+        }
+        i64 filled = 0;
+        i64 eighth = 0;
+        if (bar > 0) {
+            filled = bar * self.percent() / 100;
+            eighth = (bar * self.percent() - filled * 100) * 8 / 100;
+        }
+        i64 mid = (i64)inner.y + (i64)inner.height / 2;
+        for (i64 row = 0; row < (i64)inner.height; row = row + 1) {
+            i64 y = (i64)inner.y + row;
+            if (y == mid && self.label != (str)0) {
+                buf.set_string((i64)inner.x, y, self.label, self.style.bold(), lw);
+            }
+            for (i64 col = 0; col < bar; col = col + 1) {
+                if (col < filled) {
+                    buf.set_string(x + col, y, "█", self.filled_style, 1);
+                } else if (col == filled && eighth > 0) {
+                    buf.set_string(x + col, y, hbar_tip(eighth), self.filled_style, 1);
+                } else {
+                    buf.set_string(x + col, y, "░", self.empty_style, 1);
+                }
+            }
+            if (show_pct && y == mid) {
+                String pct = @format("{}%", self.percent());
+                buf.set_string(x + bar + 1, y, pct.to_str(), self.style, 4);
+                pct.drop();
+            }
+        }
+    }
+}
