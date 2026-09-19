@@ -1,0 +1,182 @@
+// List: selectable single-line items with a highlight and scroll window.
+//
+// Items own their text. ListState tracks the selection and the scroll
+// offset; render clamps the offset so the selection stays visible.
+
+import std.mem.vec;
+import std.fmt;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.widget;
+import atelier.widgets.block;
+
+struct ListItem {
+    String text;
+    Style style;
+}
+
+impl ListItem {
+    ListItem new(str text) {
+        ListItem i;
+        i.text = String.from_str(text);
+        i.style = Style.new();
+        return move i;
+    }
+
+    ListItem styled(str text, Style style) {
+        ListItem i = ListItem.new(text);
+        i.style = style;
+        return move i;
+    }
+}
+
+struct List {
+    Vec<ListItem> items;
+    Style style;
+    Style highlight_style;
+    str highlight_symbol;
+    Block block;
+    bool has_block;
+}
+
+impl List {
+    List new(Vec<ListItem> items) {
+        List l;
+        l.items = move items;
+        l.style = Style.new();
+        l.highlight_style = Style.new().reversed();
+        l.highlight_symbol = (str)0;
+        l.block = Block.new();
+        l.has_block = false;
+        return move l;
+    }
+
+    List block(List self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return move self;
+    }
+
+    List style(List self, Style style) {
+        self.style = style;
+        return move self;
+    }
+
+    List highlight_style(List self, Style style) {
+        self.highlight_style = style;
+        return move self;
+    }
+
+    List highlight_symbol(List self, str symbol) {
+        self.highlight_symbol = symbol;
+        return move self;
+    }
+
+    i64 len(&self) {
+        return self.items.len();
+    }
+}
+
+struct ListState {
+    i64 selected;
+    i64 offset;
+}
+
+impl ListState {
+    ListState new() {
+        ListState s;
+        s.selected = -1;
+        s.offset = 0;
+        return s;
+    }
+
+    void select(&mut self, i64 idx) {
+        self.selected = idx;
+    }
+
+    void select_none(&mut self) {
+        self.selected = -1;
+    }
+}
+
+impl StatefulWidget for List {
+    type State = ListState;
+
+    void render(*self, Rect* area, Buffer* buf, ListState* state) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        i64 h = (i64)inner.height;
+        if (h <= 0) {
+            return;
+        }
+        i64 n = self.items.len();
+        // Clamp selection into range; keep it visible via the offset.
+        i64 sel = state.selected;
+        if (sel < -1) {
+            sel = -1;
+        }
+        if (sel >= n) {
+            sel = n - 1;
+        }
+        state.selected = sel;
+        if (sel >= 0) {
+            if (sel < state.offset) {
+                state.offset = sel;
+            }
+            if (sel >= state.offset + h) {
+                state.offset = sel - h + 1;
+            }
+        }
+        if (state.offset < 0) {
+            state.offset = 0;
+        }
+        i64 sym_w = 0;
+        if (self.highlight_symbol != (str)0) {
+            sym_w = span_width_of(self.highlight_symbol);
+        }
+        for (i64 row = 0; row < h; row = row + 1) {
+            i64 idx = state.offset + row;
+            if (idx >= n) {
+                break;
+            }
+            ListItem* item = self.items.get_ptr(idx);
+            Style st = self.style.patch(item.style);
+            i64 x = (i64)inner.x;
+            i64 y = (i64)inner.y + row;
+            if (idx == sel) {
+                st = st.patch(self.highlight_style);
+                if (sym_w > 0) {
+                    buf.set_string(x, y, self.highlight_symbol, st, (i64)inner.width);
+                    x = x + sym_w;
+                }
+            }
+            i64 max = (i64)inner.x + (i64)inner.width - x;
+            if (max < 0) {
+                max = 0;
+            }
+            buf.set_string(x, y, item.text.to_str(), st, max);
+        }
+    }
+}
+
+/// Cell width of a borrowed string (span helper without a Span value).
+i64 span_width_of(str text) {
+    if (text == (str)0) {
+        return 0;
+    }
+    u8* p = (u8*)text;
+    i64 len = cstr_len(p);
+    i64 idx = 0;
+    i64 w = 0;
+    while (idx < len) {
+        u32 cp = utf8_next(p, len, &idx);
+        w = w + (i64)char_width(cp);
+    }
+    return w;
+}
