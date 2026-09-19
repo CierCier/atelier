@@ -1,0 +1,237 @@
+// Paragraph: wrapped text in an optional block.
+//
+// Greedy word wrap (long words char-split); scroll offsets select the
+// visible window. Visual rows are byte ranges into the source spans — no
+// per-row copies — rendered through Buffer.set_bytes.
+
+import std.mem.vec;
+import std.fmt;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.widget;
+import atelier.widgets.block;
+
+struct Paragraph {
+    Text text;
+    Block block;
+    bool has_block;
+    Style style;
+    bool wrap;
+    u16 scroll_x;
+    u16 scroll_y;
+    Alignment align;
+}
+
+impl Paragraph {
+    Paragraph new(Text text) {
+        Paragraph p;
+        p.text = move text;
+        p.block = Block.new();
+        p.has_block = false;
+        p.style = Style.new();
+        p.wrap = true;
+        p.scroll_x = (u16)0;
+        p.scroll_y = (u16)0;
+        p.align = Alignment.Left;
+        return move p;
+    }
+
+    Paragraph block(Paragraph self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return move self;
+    }
+
+    Paragraph style(Paragraph self, Style style) {
+        self.style = style;
+        return move self;
+    }
+
+    Paragraph wrap(Paragraph self, bool wrap) {
+        self.wrap = wrap;
+        return move self;
+    }
+
+    Paragraph scroll(Paragraph self, u16 x, u16 y) {
+        self.scroll_x = x;
+        self.scroll_y = y;
+        return move self;
+    }
+
+    Paragraph alignment(Paragraph self, Alignment align) {
+        self.align = align;
+        return move self;
+    }
+}
+
+// One visual row: byte range of one span plus its resolved width.
+struct VisualRow {
+    Span* span;
+    Style style;
+    Alignment align;
+    i64 from;
+    i64 to;
+    i64 width;
+}
+
+/// Reflow source spans into visual rows of at most `width` cells.
+/// Greedy word wrap; overlong words split mid-word; empty lines keep a row.
+Vec<VisualRow> reflow(Text* text, i64 width) {
+    Vec<VisualRow> rows = Vec<VisualRow>.new();
+    if (width <= 0) {
+        return rows;
+    }
+    for (i64 li = 0; li < text.lines.len(); li = li + 1) {
+        Line* line = text.lines.get_ptr(li);
+        if (line.spans.len() == 0) {
+            VisualRow r;
+            r.span = (Span*)0;
+            r.style = line.style;
+            r.align = line.align;
+            r.from = 0;
+            r.to = 0;
+            r.width = 0;
+            rows.push(r);
+        }
+        for (i64 si = 0; si < line.spans.len(); si = si + 1) {
+            Span* sp = line.spans.get_ptr(si);
+            Style st = line.style.patch(sp.style);
+            reflow_span(sp, st, line.align, width, &rows);
+        }
+    }
+    return rows;
+}
+
+/// Wrap one span's text, appending visual rows.
+void reflow_span(Span* sp, Style style, Alignment align, i64 width, Vec<VisualRow>* rows) {
+    if (sp.text == (str)0) {
+        return;
+    }
+    u8* p = (u8*)sp.text;
+    i64 len = cstr_len(p);
+    i64 idx = 0;
+    i64 row_start = 0;
+    i64 row_w = 0;
+    i64 last_space = -1;
+    i64 last_space_w = 0;
+    while (idx < len) {
+        i64 at = idx;
+        u32 cp = utf8_next(p, len, &idx);
+        i64 w = (i64)char_width(cp);
+        if (cp == (u32)32) {
+            last_space = at;
+            last_space_w = row_w;
+        }
+        if (w == 0) {
+            continue;
+        }
+        if (row_w + w > width) {
+            // Break before this codepoint, or after the last space.
+            i64 end = at;
+            if (last_space >= row_start) {
+                end = last_space;
+            }
+            VisualRow r;
+            r.span = sp;
+            r.style = style;
+            r.align = align;
+            r.from = row_start;
+            r.to = end;
+            r.width = row_w_at(p, row_start, end);
+            rows.push(r);
+            if (last_space >= row_start) {
+                row_start = last_space + 1;
+            } else {
+                row_start = at;
+            }
+            idx = row_start;
+            row_w = 0;
+            last_space = -1;
+            continue;
+        }
+        row_w = row_w + w;
+    }
+    VisualRow r;
+    r.span = sp;
+    r.style = style;
+    r.align = align;
+    r.from = row_start;
+    r.to = len;
+    r.width = row_w_at(p, row_start, len);
+    rows.push(r);
+}
+
+/// Cell width of bytes in [from, to).
+i64 row_w_at(u8* p, i64 from, i64 to) {
+    i64 idx = from;
+    i64 w = 0;
+    while (idx < to) {
+        u32 cp = utf8_next(p, to, &idx);
+        w = w + (i64)char_width(cp);
+    }
+    return w;
+}
+
+impl Widget for Paragraph {
+    void render(*self, Rect* area, Buffer* buf) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        i64 w = (i64)inner.width;
+        i64 h = (i64)inner.height;
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        if (!self.wrap) {
+            // No wrapping: one source line per row, truncated at the edge.
+            i64 y = (i64)inner.y;
+            for (i64 li = (i64)self.scroll_y; li < self.text.lines.len(); li = li + 1) {
+                if (y >= (i64)inner.y + h) {
+                    break;
+                }
+                Line* line = self.text.lines.get_ptr(li);
+                i64 lw = line.width();
+                if (lw > w) {
+                    lw = w;
+                }
+                i64 pos = (i64)inner.x + align_offset(line.align, w, lw) - (i64)self.scroll_x;
+                for (i64 si = 0; si < line.spans.len(); si = si + 1) {
+                    Span* sp = line.spans.get_ptr(si);
+                    Style st = line.style.patch(sp.style);
+                    i64 max = (i64)inner.x + w - pos;
+                    if (max < 0) {
+                        max = 0;
+                    }
+                    pos = buf.set_string(pos, y, sp.text, st, max);
+                }
+                y = y + 1;
+            }
+            return;
+        }
+        Vec<VisualRow> rows = reflow(&self.text, w);
+        i64 y = (i64)inner.y;
+        i64 skip = (i64)self.scroll_y;
+        i64 sx = (i64)self.scroll_x;
+        for (i64 i = 0; i < rows.len() && y < (i64)inner.y + h; i = i + 1) {
+            if (skip > 0) {
+                skip = skip - 1;
+                continue;
+            }
+            VisualRow* r = rows.get_ptr(i);
+            i64 start = (i64)inner.x + align_offset(r.align, w, r.width) - sx;
+            i64 max = (i64)inner.x + w - start;
+            if (max < 0) {
+                max = 0;
+            }
+            if (r.span != (Span*)0 && max > 0) {
+                buf.set_bytes(start, y, (u8*)r.span.text, r.from, r.to, r.style, max);
+            }
+            y = y + 1;
+        }
+    }
+}

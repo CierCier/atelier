@@ -6,3 +6,4 @@ import atelier.buffer;
 import atelier.widget;
 import atelier.terminal;
 import atelier.widgets.block;
+import atelier.widgets.paragraph;

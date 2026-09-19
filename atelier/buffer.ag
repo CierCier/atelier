@@ -118,15 +118,23 @@ impl Buffer {
     /// written cell. Zero-width codepoints are skipped; wide ones advance
     /// two cells; writing stops at max_width cells.
     i64 set_string(&self, i64 x, i64 y, str text, Style style, i64 max_width) {
-        if (text == (str)0 || max_width <= 0) {
+        if (text == (str)0) {
             return x;
         }
         u8* p = (u8*)text;
-        i64 len = cstr_len(p);
-        i64 idx = 0;
+        return self.set_bytes(x, y, p, 0, cstr_len(p), style, max_width);
+    }
+
+    /// Write bytes in [from, to) — a range of a larger string, so wrapped
+    /// rows render without copying. Decode is bounded at `to`.
+    i64 set_bytes(&self, i64 x, i64 y, u8* p, i64 from, i64 to, Style style, i64 max_width) {
+        if (p == (u8*)0 || from >= to || max_width <= 0) {
+            return x;
+        }
+        i64 idx = from;
         i64 used = 0;
-        while (idx < len && used < max_width) {
-            u32 cp = utf8_next(p, len, &idx);
+        while (idx < to && used < max_width) {
+            u32 cp = utf8_next(p, to, &idx);
             u16 w = char_width(cp);
             if (w == (u16)0) {
                 continue;

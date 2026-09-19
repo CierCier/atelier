@@ -1,0 +1,59 @@
+import atelier.widgets.paragraph;
+import atelier.widgets.block;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.widget;
+import std.test;
+
+String cell_string(Buffer* b, i64 x, i64 y, i64 n) {
+    // Read n cells as codepoints into an owned String for comparison.
+    String s = String.new();
+    for (i64 i = 0; i < n; i = i + 1) {
+        Cell* c = b.cell_mut(x + i, y);
+        u32 ch = c.ch;
+        if (ch == (u32)0) { ch = (u32)32; }
+        s.push_codepoint(ch);
+    }
+    return move s;
+}
+
+i32 main() {
+    test_start("plain render in block");
+    {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)10, (u16)4);
+        Buffer b = Buffer.empty(a);
+        Text t = Text.from("hello");
+        Paragraph p = Paragraph.new(move t).block(Block.new().title("t"));
+        p.render(&a, &b);
+        String got = cell_string(&b, 1, 1, 5);
+        assert_true(got.equals("hello"), "text inside block");
+        assert_eq_i64(0x250C, (i64)b.cell_mut(0, 0).ch, "block corner");
+    }
+    test_start("word wrap");
+    {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)6, (u16)4);
+        Buffer b = Buffer.empty(a);
+        Text t = Text.from("aa bb cc dd");
+        Paragraph p = Paragraph.new(move t);
+        p.render(&a, &b);
+        String r0 = cell_string(&b, 0, 0, 6);
+        assert_true(r0.equals("aa bb "), "first visual row");
+        String r1 = cell_string(&b, 0, 1, 6);
+        assert_true(r1.equals("cc dd "), "second visual row");
+    }
+    test_start("scroll selects window");
+    {
+        Rect a = Rect.new((u16)0, (u16)0, (u16)6, (u16)2);
+        Buffer b = Buffer.empty(a);
+        Text t = Text.from("one\ntwo\nthree");
+        Paragraph p = Paragraph.new(move t).scroll((u16)0, (u16)1);
+        p.render(&a, &b);
+        String s0 = cell_string(&b, 0, 0, 6);
+        assert_true(s0.equals("two   "), "scrolled past first");
+        String s1 = cell_string(&b, 0, 1, 6);
+        assert_true(s1.equals("three "), "second visible");
+    }
+    return done();
+}
