@@ -1,0 +1,175 @@
+// Atelier demo: header + selectable list + detail pane + status bar.
+// Run from a real terminal: `agc run --no-cache examples/demo.ag`
+// Move with Up/Down (or j/k), quit with q or Ctrl-C.
+import atelier;
+import std.term;
+import std.sys.result;
+import std.io.file;
+
+Vec<ListItem> demo_items() {
+    Vec<ListItem> v = Vec<ListItem>.new();
+    v.push(ListItem.new("Buffer — retained cell grid"));
+    v.push(ListItem.new("Layout — constraint solver"));
+    v.push(ListItem.new("Style — colors and modifiers"));
+    v.push(ListItem.new("Text — spans and wrapping"));
+    v.push(ListItem.new("Block — borders and titles"));
+    v.push(ListItem.new("Paragraph — reflowed prose"));
+    v.push(ListItem.new("List — this widget"));
+    v.push(ListItem.new("Terminal — diffed output"));
+    return move v;
+}
+
+str key_label(KeyEvent* e) {
+    return match e.kind {
+        Char : "char",
+        Enter : "enter",
+        Tab : "tab",
+        Backspace : "backspace",
+        Esc : "esc",
+        Up : "up",
+        Down : "down",
+        Left : "left",
+        Right : "right",
+        Home : "home",
+        End : "end",
+        PageUp : "pageup",
+        PageDown : "pagedown",
+        Insert : "insert",
+        Delete : "delete",
+        FKey : "fkey",
+        Unknown : "unknown",
+    };
+}
+
+void draw_ui(Frame* f, List* list, ListState* state, str hint) {
+    Rect area = f.area;
+    Vec<Constraint> vcs = Vec<Constraint>.new();
+    vcs.push(Constraint.Length((u16)3));
+    vcs.push(Constraint.Fill((u16)1));
+    vcs.push(Constraint.Length((u16)1));
+    Layout outer = Layout.new(Direction.Vertical, move vcs);
+    Vec<Rect> rows = outer.split(area);
+
+    Rect* hr = rows.get_ptr((i64)0);
+    Rect* br = rows.get_ptr((i64)1);
+    Rect* fr = rows.get_ptr((i64)2);
+
+    Text head = Text.from(" Atelier demo");
+    Paragraph hp = Paragraph.new(move head).block(
+        Block.new().title(" ratatui-grade TUI in Silver ").title_style(Style.new().bold())
+    );
+    hp.render(hr, f.buf);
+
+    Vec<Constraint> hcs = Vec<Constraint>.new();
+    hcs.push(Constraint.Percentage((u16)40));
+    hcs.push(Constraint.Fill((u16)1));
+    Layout body = Layout.new(Direction.Horizontal, move hcs);
+    Vec<Rect> cols = body.split(*br);
+    Rect* lr = cols.get_ptr((i64)0);
+    Rect* dr = cols.get_ptr((i64)1);
+
+    list.render(lr, f.buf, state);
+
+    String detail = @format("detail pane\n\nselected row: {}\n\n{}", state.selected, hint);
+    Text dt = Text.from(detail.to_str());
+    Paragraph dp = Paragraph.new(move dt).block(Block.new().title(" detail "));
+    dp.render(dr, f.buf);
+    detail.drop();
+
+    Text ft = Text.from(" ↑/↓ or j/k: move · q: quit");
+    Paragraph fp = Paragraph.new(move ft);
+    fp.render(fr, f.buf);
+}
+
+i32 main() {
+    if (!term_is_tty(0)) {
+        STDOUT.write_str("run this from a real terminal\n");
+        STDOUT.flush();
+        return 1;
+    }
+    Result<RawMode, Error> g = RawMode.enable(0);
+    if (g.is_err()) {
+        return 1;
+    }
+    RawMode _guard = g.unwrap();
+
+    Terminal t = Terminal.full_screen(&STDOUT);
+    t.hide_cursor();
+    term_enter_alt(&STDOUT);
+    STDOUT.flush();
+
+    List list = List.new(demo_items()).highlight_symbol("> ").block(Block.new().title(" widgets "));
+    ListState state = ListState.new();
+    state.select(0);
+    KeyParser keys = KeyParser.new();
+    String hint = String.from_str("press keys");
+
+    bool quit = false;
+    while (!quit) {
+        // Follow terminal resizes (ignore degenerate readings).
+        Result<TermSize, Error> sz = term_get_size(0);
+        if (sz.is_ok()) {
+            TermSize s = sz.unwrap();
+            if (s.cols > 0 && s.rows > 0
+                && (s.cols != (i64)t.area.width || s.rows != (i64)t.area.height)) {
+                t.resize(s.cols, s.rows);
+                t.clear();
+            }
+        }
+        Frame f = t.frame();
+        draw_ui(&f, &list, &state, hint.to_str());
+        t.flush();
+
+        u8 byte = 0;
+        Result<i64, Error> r = try_read(0, &byte, 1);
+        if (r.is_err() || r.value() == 0) {
+            break;
+        }
+        Optional<KeyEvent> o = keys.feed(byte);
+        if (o.is_none()) {
+            continue;
+        }
+        KeyEvent e = o.unwrap();
+        bool up = false;
+        bool down = false;
+        i64 act = match e.kind {
+            Up : 1,
+            Down : 2,
+            Char : 3,
+            _ : 0,
+        };
+        if (act == 1) {
+            up = true;
+        } else if (act == 2) {
+            down = true;
+        } else if (act == 3) {
+            if (e.codepoint == (u32)113) {
+                quit = true; // 'q'
+            }
+            if (e.codepoint == (u32)106) {
+                down = true; // 'j'
+            }
+            if (e.codepoint == (u32)107) {
+                up = true; // 'k'
+            }
+            if (e.ctrl) {
+                quit = true; // Ctrl-C and friends
+            }
+        }
+        if (up) {
+            state.select(state.selected - 1);
+        }
+        if (down) {
+            state.select(state.selected + 1);
+        }
+        hint.clear();
+        hint.push_str("last: ");
+        hint.push_str(key_label(&e));
+    }
+
+    term_exit_alt(&STDOUT);
+    t.show_cursor();
+    STDOUT.flush();
+    hint.drop();
+    return 0;
+}

@@ -3,3 +3,6 @@ version = "0.1.0"
 
 [lib.atelier]
 entry = "atelier.ag"
+
+[bin.demo]
+entry = "examples/demo.ag"
