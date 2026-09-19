@@ -1,12 +1,20 @@
-// Atelier demo: header + selectable list + detail pane + status bar.
+// Atelier showcase: every component on display, driven by the App runner.
 // Run from a real terminal: `agc run --no-cache examples/demo.ag`
-// Move with Up/Down (or j/k), quit with q or Ctrl-C.
+// Tabs 1/2/3 (or Left/Right): Widgets, Text, State. j/k + arrows navigate.
+// F5 saves the list snapshot, F8 restores it. q quits.
 import atelier;
 import std.term;
-import std.sys.result;
-import std.io.file;
 
-Vec<ListItem> demo_items() {
+struct Showcase {
+    List items;
+    ListState picked;
+    i64 tab;
+    String hint;
+    String snap_status;
+    i64 ticks;
+}
+
+Vec<ListItem> showcase_items() {
     Vec<ListItem> v = Vec<ListItem>.new();
     v.push(ListItem.new("Buffer — retained cell grid"));
     v.push(ListItem.new("Layout — constraint solver"));
@@ -19,157 +27,272 @@ Vec<ListItem> demo_items() {
     return move v;
 }
 
-str key_label(KeyEvent* e) {
-    return match e.kind {
-        Char : "char",
-        Enter : "enter",
-        Tab : "tab",
-        Backspace : "backspace",
-        Esc : "esc",
-        Up : "up",
-        Down : "down",
-        Left : "left",
-        Right : "right",
-        Home : "home",
-        End : "end",
-        PageUp : "pageup",
-        PageDown : "pagedown",
-        Insert : "insert",
-        Delete : "delete",
-        FKey : "fkey",
-        Unknown : "unknown",
-    };
-}
-
-void draw_ui(Frame* f, List* list, ListState* state, str hint) {
-    Rect area = f.area;
-    Vec<Constraint> vcs = Vec<Constraint>.new();
-    vcs.push(Constraint.Length((u16)3));
-    vcs.push(Constraint.Fill((u16)1));
-    vcs.push(Constraint.Length((u16)1));
-    Layout outer = Layout.new(Direction.Vertical, move vcs);
-    Vec<Rect> rows = outer.split(area);
-
-    Rect* hr = rows.get_ptr((i64)0);
-    Rect* br = rows.get_ptr((i64)1);
-    Rect* fr = rows.get_ptr((i64)2);
-
-    Text head = Text.from(" Atelier demo");
-    Paragraph hp = Paragraph.new(move head).block(
-        Block.new().title(" ratatui-grade TUI in Silver ").title_style(Style.new().bold())
-    );
-    hp.render(hr, f.buf);
-
-    Vec<Constraint> hcs = Vec<Constraint>.new();
-    hcs.push(Constraint.Percentage((u16)40));
-    hcs.push(Constraint.Fill((u16)1));
-    Layout body = Layout.new(Direction.Horizontal, move hcs);
-    Vec<Rect> cols = body.split(*br);
-    Rect* lr = cols.get_ptr((i64)0);
-    Rect* dr = cols.get_ptr((i64)1);
-
-    list.render(lr, f.buf, state);
-
-    String detail = @format("detail pane\n\nselected row: {}\n\n{}", state.selected, hint);
-    Text dt = Text.from(detail.to_str());
-    Paragraph dp = Paragraph.new(move dt).block(Block.new().title(" detail "));
-    dp.render(dr, f.buf);
-    detail.drop();
-
-    Text ft = Text.from(" ↑/↓ or j/k: move · q: quit");
-    Paragraph fp = Paragraph.new(move ft);
-    fp.render(fr, f.buf);
-}
-
-i32 main() {
-    if (!term_is_tty(0)) {
-        STDOUT.write_str("run this from a real terminal\n");
-        STDOUT.flush();
-        return 1;
+impl App for Showcase {
+    void init(*self) {
+        self.tab = 0;
+        self.ticks = 0;
+        self.picked.select(0);
     }
-    Result<RawMode, Error> g = RawMode.enable(0);
-    if (g.is_err()) {
-        return 1;
-    }
-    RawMode _guard = g.unwrap();
 
-    Terminal t = Terminal.full_screen(&STDOUT);
-    t.hide_cursor();
-    term_enter_alt(&STDOUT);
-    STDOUT.flush();
-
-    List list = List.new(demo_items()).highlight_symbol("> ").block(Block.new().title(" widgets "));
-    ListState state = ListState.new();
-    state.select(0);
-    KeyParser keys = KeyParser.new();
-    String hint = String.from_str("press keys");
-
-    bool quit = false;
-    while (!quit) {
-        // Follow terminal resizes (ignore degenerate readings).
-        Result<TermSize, Error> sz = term_get_size(0);
-        if (sz.is_ok()) {
-            TermSize s = sz.unwrap();
-            if (s.cols > 0 && s.rows > 0
-                && (s.cols != (i64)t.area.width || s.rows != (i64)t.area.height)) {
-                t.resize(s.cols, s.rows);
-                t.clear();
-            }
-        }
-        Frame f = t.frame();
-        draw_ui(&f, &list, &state, hint.to_str());
-        t.flush();
-
-        u8 byte = 0;
-        Result<i64, Error> r = try_read(0, &byte, 1);
-        if (r.is_err() || r.value() == 0) {
-            break;
-        }
-        Optional<KeyEvent> o = keys.feed(byte);
-        if (o.is_none()) {
-            continue;
-        }
-        KeyEvent e = o.unwrap();
-        bool up = false;
-        bool down = false;
+    bool on_key(*self, KeyEvent* e) {
         i64 act = match e.kind {
             Up : 1,
             Down : 2,
-            Char : 3,
+            Left : 3,
+            Right : 4,
+            Char : 5,
+            FKey : 6,
             _ : 0,
         };
         if (act == 1) {
-            up = true;
+            self.picked.select(self.picked.selected - 1);
         } else if (act == 2) {
-            down = true;
+            self.picked.select(self.picked.selected + 1);
         } else if (act == 3) {
-            if (e.codepoint == (u32)113) {
-                quit = true; // 'q'
+            self.tab = self.tab - 1;
+            if (self.tab < 0) {
+                self.tab = 2;
             }
-            if (e.codepoint == (u32)106) {
-                down = true; // 'j'
+        } else if (act == 4) {
+            self.tab = self.tab + 1;
+            if (self.tab > 2) {
+                self.tab = 0;
             }
-            if (e.codepoint == (u32)107) {
-                up = true; // 'k'
+        } else if (act == 5) {
+            u32 cp = e.codepoint;
+            if (cp == (u32)113 || e.ctrl) {
+                return true; // 'q' or any ctrl combo
             }
-            if (e.ctrl) {
-                quit = true; // Ctrl-C and friends
+            if (cp == (u32)106) {
+                self.picked.select(self.picked.selected + 1);
+            }
+            if (cp == (u32)107) {
+                self.picked.select(self.picked.selected - 1);
+            }
+            if (cp == (u32)49) {
+                self.tab = 0;
+            }
+            if (cp == (u32)50) {
+                self.tab = 1;
+            }
+            if (cp == (u32)51) {
+                self.tab = 2;
+            }
+        } else if (act == 6) {
+            if (e.fnum == 5) {
+                str snap = @json(self.picked);
+                if (store_save("/tmp/atelier-showcase.json", snap)) {
+                    self.snap_status = String.from_str("saved");
+                } else {
+                    self.snap_status = String.from_str("save FAILED");
+                }
+            }
+            if (e.fnum == 8) {
+                Result<String, Error> r = store_load("/tmp/atelier-showcase.json");
+                if (r.is_err()) {
+                    self.snap_status = String.from_str("no snapshot");
+                } else {
+                    String content = r.unwrap();
+                    str text = content.to_str();
+                    Result<ListState, JsonError> back = @from_json(ListState, text);
+                    content.drop();
+                    if (back.is_err()) {
+                        self.snap_status = String.from_str("snapshot corrupt");
+                    } else {
+                        ListState restored = back.unwrap();
+                        self.picked.select(restored.selected);
+                        self.picked.offset = restored.offset;
+                        self.snap_status = String.from_str("restored");
+                    }
+                }
             }
         }
-        if (up) {
-            state.select(state.selected - 1);
-        }
-        if (down) {
-            state.select(state.selected + 1);
-        }
-        hint.clear();
-        hint.push_str("last: ");
-        hint.push_str(key_label(&e));
+        self.hint.clear();
+        self.hint.push_str("last: ");
+        self.hint.push_str(key_action_name(act));
+        return false;
     }
 
-    term_exit_alt(&STDOUT);
-    t.show_cursor();
-    STDOUT.flush();
-    hint.drop();
+    void on_tick(*self, i64 _dt_ms) {
+        self.ticks = self.ticks + 1;
+    }
+
+    void render(*self, Frame* f) {
+        Rect area = f.area;
+        Vec<Constraint> vcs = Vec<Constraint>.new();
+        vcs.push(Constraint.Length((u16)3));
+        vcs.push(Constraint.Fill((u16)1));
+        vcs.push(Constraint.Length((u16)1));
+        Layout outer = Layout.new(Direction.Vertical, move vcs);
+        Vec<Rect> rows = outer.split(area);
+        self.render_tabs(f.buf, rows.get_ptr((i64)0));
+        if (self.tab == 0) {
+            self.render_widgets(f.buf, rows.get_ptr((i64)1));
+        } else if (self.tab == 1) {
+            self.render_text(f.buf, rows.get_ptr((i64)1));
+        } else {
+            self.render_state(f.buf, rows.get_ptr((i64)1));
+        }
+        self.render_bar(f.buf, rows.get_ptr((i64)2));
+    }
+
+    i64 tick_ms(*self) {
+        return 250;
+    }
+}
+
+str key_action_name(i64 act) {
+    if (act == 1) {
+        return "up";
+    }
+    if (act == 2) {
+        return "down";
+    }
+    if (act == 3) {
+        return "left";
+    }
+    if (act == 4) {
+        return "right";
+    }
+    if (act == 5) {
+        return "char";
+    }
+    if (act == 6) {
+        return "fkey";
+    }
+    return "other";
+}
+
+impl Showcase {
+    void render_tabs(&self, Buffer* buf, Rect* area) {
+        Text head = Text.from(" Atelier showcase");
+        Paragraph hp = Paragraph.new(move head).block(
+            Block.new().title(" ratatui-grade TUI in Silver ").title_style(Style.new().bold())
+        );
+        hp.render(area, buf);
+
+        // Tab bar on the last header row.
+        i64 bx = (i64)area.x + 2;
+        i64 by = (i64)area.y + (i64)area.height - 1;
+        if (by <= (i64)area.y) {
+            return;
+        }
+        str names[3] = { "1 Widgets", "2 Text", "3 State" };
+        for (i64 i = 0; i < 3; i = i + 1) {
+            Style st = Style.new();
+            if (i == self.tab) {
+                st = Style.new().reversed().bold();
+            }
+            buf.set_string(bx, by, names[i], st, 12);
+            bx = bx + 12;
+        }
+    }
+
+    void render_widgets(&self, Buffer* buf, Rect* area) {
+        Vec<Constraint> hcs = Vec<Constraint>.new();
+        hcs.push(Constraint.Percentage((u16)45));
+        hcs.push(Constraint.Fill((u16)1));
+        Layout body = Layout.new(Direction.Horizontal, move hcs);
+        Vec<Rect> cols = body.split(*area);
+        Rect* lr = cols.get_ptr((i64)0);
+        Rect* dr = cols.get_ptr((i64)1);
+
+        Vec<Constraint> lcs = Vec<Constraint>.new();
+        lcs.push(Constraint.Fill((u16)1));
+        lcs.push(Constraint.Length((u16)5));
+        Layout left = Layout.new(Direction.Vertical, move lcs);
+        Vec<Rect> lrows = left.split(*lr);
+        self.items.render(lrows.get_ptr((i64)0), buf, &self.picked);
+
+        // Block border variants, live.
+        Block plain = Block.new().title(" plain ");
+        plain.render(lrows.get_ptr((i64)1), buf);
+
+        String detail = @format("detail pane\n\nselected row: {}\n\nF5/F8 snapshot the list", self.picked.selected);
+        Text dt = Text.from(detail.to_str());
+        Paragraph dp = Paragraph.new(move dt).block(Block.new().title(" detail "));
+        dp.render(dr, buf);
+        detail.drop();
+    }
+
+    void render_text(&self, Buffer* buf, Rect* area) {
+        Vec<Constraint> vcs = Vec<Constraint>.new();
+        vcs.push(Constraint.Length((u16)5));
+        vcs.push(Constraint.Fill((u16)1));
+        Layout halves = Layout.new(Direction.Vertical, move vcs);
+        Vec<Rect> rows = halves.split(*area);
+
+        Text wrap_src = Text.from("Paragraph reflows this prose to fit the pane. Resize the terminal to watch greedy word wrap re-break these lines live.");
+        Paragraph wrapped = Paragraph.new(move wrap_src).block(Block.new().title(" wrap "));
+        wrapped.render(rows.get_ptr((i64)0), buf);
+
+        // Alignment row: three mini paragraphs.
+        Vec<Constraint> hcs = Vec<Constraint>.new();
+        hcs.push(Constraint.Fill((u16)1));
+        hcs.push(Constraint.Fill((u16)1));
+        hcs.push(Constraint.Fill((u16)1));
+        Layout thirds = Layout.new(Direction.Horizontal, move hcs);
+        Rect* halfp = rows.get_ptr((i64)1);
+        Rect half = *halfp;
+        Vec<Rect> cols = thirds.split(half);
+        Text tl = Text.from("left");
+        Paragraph pl = Paragraph.new(move tl).alignment(Alignment.Left).block(Block.new());
+        pl.render(cols.get_ptr((i64)0), buf);
+        Text tc = Text.from("center");
+        Paragraph pc = Paragraph.new(move tc).alignment(Alignment.Center).block(Block.new());
+        pc.render(cols.get_ptr((i64)1), buf);
+        Text tr = Text.from("right");
+        Paragraph pr = Paragraph.new(move tr).alignment(Alignment.Right).block(Block.new());
+        pr.render(cols.get_ptr((i64)2), buf);
+    }
+
+    void render_state(&self, Buffer* buf, Rect* area) {
+        // Tick spinner proves hooks fire without input.
+        str spins = "|/-\\";
+        u8* sb = (u8*)spins;
+        i64 frame = self.ticks % 4;
+        u8 buf2[64];
+        buf2[0] = (u8)116; // 't'
+        buf2[1] = (u8)105; // 'i'
+        buf2[2] = (u8)99;  // 'c'
+        buf2[3] = (u8)107; // 'k'
+        buf2[4] = (u8)58;  // ':'
+        buf2[5] = (u8)32;  // ' '
+        buf2[6] = sb[frame];
+        buf2[7] = (u8)0;
+        String tick_line = String.from_str("ticks fire on schedule");
+        Text t = Text.from(tick_line.to_str());
+        Paragraph p = Paragraph.new(move t).block(Block.new().title(" auto-update "));
+        p.render(area, buf);
+        tick_line.drop();
+        // Snapshot status line.
+        Rect inner = Block.new().inner(*area);
+        if ((i64)inner.height >= 4) {
+            buf.set_string((i64)inner.x + 1, (i64)inner.y + 2, (str)&buf2[0], Style.new().bold(), 12);
+            String msg = @format("snapshot: {}", self.snap_status.to_str());
+            buf.set_string((i64)inner.x + 1, (i64)inner.y + 3, msg.to_str(), Style.new(), (i64)inner.width - 2);
+            msg.drop();
+        }
+    }
+
+    void render_bar(&self, Buffer* buf, Rect* area) {
+        String bar = @format("tabs 1/2/3 · {}/{} · ticks {} · F5 save · F8 load · q quit", self.hint.to_str(), self.snap_status.to_str(), self.ticks);
+        Text ft = Text.from(bar.to_str());
+        Style dimmed = Style.new().dim();
+        Paragraph fp = Paragraph.new(move ft).style(dimmed);
+        fp.render(area, buf);
+        bar.drop();
+    }
+}
+
+i32 main() {
+    Showcase app;
+    app.items = List.new(showcase_items()).highlight_symbol("> ").block(Block.new().title(" widgets "));
+    app.picked = ListState.new();
+    app.tab = 0;
+    app.hint = String.from_str("press keys");
+    app.snap_status = String.from_str("no snapshot yet");
+    app.ticks = 0;
+    run_app(&app);
     return 0;
 }

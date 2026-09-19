@@ -1,0 +1,85 @@
+// State persistence: file snapshots plus JSON for widget states.
+//
+// Snapshot pattern for application state:
+//     #[serialize]
+//     struct Settings { ... }
+//     store_save("/tmp/app.json", @json(settings));
+//     Result<Settings, JsonError> r = @from_json(Settings, store_load("/tmp/app.json").unwrap());
+//
+// Widget states (ListState today) serialize out of the box, so selection
+// and scroll survive restarts.
+
+import std.io.file;
+import std.json;
+import std.result;
+import std.error;
+import std.string;
+import atelier.widgets.list;
+
+bool store_save(str path, str json) {
+    if (json == (str)0) {
+        return false;
+    }
+    File f = File.open(path, "w");
+    if (f.invalid()) {
+        return false;
+    }
+    bool ok = f.write_str(json) == 0;
+    f.flush();
+    f.close();
+    return ok;
+}
+
+Result<String, Error> store_load(str path) {
+    return String.from_file(path);
+}
+
+impl ToJson for ListState {
+    void to_json(ListState* self, JsonWriter* out) {
+        out.begin_object();
+        out.field("selected");
+        out.write_i64(self.selected);
+        out.field("offset");
+        out.write_i64(self.offset);
+        out.end_object();
+    }
+}
+
+impl FromJson for ListState {
+    Result<ListState, JsonError> from_json(JsonReader* input) {
+        if (!input.begin_object()) {
+            JsonError error = JsonError.at_index(input.index);
+            return Err(move error);
+        }
+        if (!input.field("selected")) {
+            JsonError error = JsonError.at_index(input.index);
+            return Err(move error);
+        }
+        i64 sel = -1;
+        if (!input.read_i64(&mut sel)) {
+            JsonError error = JsonError.at_index(input.index);
+            return Err(move error);
+        }
+        if (!input.comma()) {
+            JsonError error = JsonError.at_index(input.index);
+            return Err(move error);
+        }
+        if (!input.field("offset")) {
+            JsonError error = JsonError.at_index(input.index);
+            return Err(move error);
+        }
+        i64 off = 0;
+        if (!input.read_i64(&mut off)) {
+            JsonError error = JsonError.at_index(input.index);
+            return Err(move error);
+        }
+        if (!input.end_object()) {
+            JsonError error = JsonError.at_index(input.index);
+            return Err(move error);
+        }
+        ListState s;
+        s.selected = sel;
+        s.offset = off;
+        return Ok(move s);
+    }
+}

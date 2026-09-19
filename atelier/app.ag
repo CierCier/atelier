@@ -1,0 +1,158 @@
+// Application runner: raw mode, alt screen, event loop with tick hooks.
+//
+// Implement App for your state struct and hand it to run_app: keys flow to
+// on_key (true quits), on_tick fires every tick_ms, render draws each
+// frame with activity. Resize is tracked automatically. No closures: all
+// dispatch is trait calls. Lone ESC resolves after 50ms without a follower.
+
+import std.io.file;
+import std.sys.result;
+import std.sys.errno;
+import std.time;
+import std.term;
+import atelier.terminal;
+
+trait App {
+    void init(*self);
+    /// Handle a key; return true to quit.
+    bool on_key(*self, KeyEvent* e);
+    /// Periodic hook; dt_ms is the elapsed time since the last tick.
+    void on_tick(*self, i64 dt_ms);
+    void render(*self, Frame* f);
+    /// Tick interval in ms; 0 disables ticks (input-driven rendering).
+    i64 tick_ms(*self);
+}
+
+const i64 ESC_TIMEOUT_MS = 50;
+const i64 IDLE_SLEEP_MS = 5;
+
+void run_app<A>(A* app) {
+    if (!term_is_tty(0)) {
+        STDOUT.write_str("run_app needs a terminal on stdin\n");
+        STDOUT.flush();
+        return;
+    }
+    Result<RawMode, Error> g = RawMode.enable(0);
+    if (g.is_err()) {
+        STDOUT.write_str("run_app: raw mode failed\n");
+        STDOUT.flush();
+        return;
+    }
+    RawMode _guard = g.unwrap();
+
+    // Nonblocking stdin (restored below); reads then never stall ticks.
+    Result<i64, Error> saved = try_fcntl(0, F_GETFL, 0);
+    bool restd = false;
+    i64 saved_flags = 0;
+    if (saved.is_ok()) {
+        saved_flags = saved.value();
+        restd = try_fcntl(0, F_SETFL, saved_flags | O_NONBLOCK).is_ok();
+    }
+
+    Terminal t = Terminal.full_screen(&STDOUT);
+    t.hide_cursor();
+    term_enter_alt(&STDOUT);
+    STDOUT.flush();
+
+    app.init();
+    KeyParser keys = KeyParser.new();
+    bool seq_open = false;
+    Instant last_byte = now();
+    Instant last_tick = now();
+    bool quit = false;
+    bool first = true;
+    while (!quit) {
+        bool activity = first;
+        first = false;
+
+        // Resize tracking.
+        Result<TermSize, Error> sz = term_get_size(0);
+        if (sz.is_ok()) {
+            TermSize s = sz.unwrap();
+            if (s.cols > 0 && s.rows > 0
+                && (s.cols != (i64)t.area.width || s.rows != (i64)t.area.height)) {
+                t.resize(s.cols, s.rows);
+                t.clear();
+                activity = true;
+            }
+        }
+
+        // Drain available input bytes.
+        for (i64 n = 0; n < 64; n = n + 1) {
+            u8 byte = 0;
+            Result<i64, Error> r = try_read(0, &byte, 1);
+            if (r.is_err()) {
+                if (r.err_is(EAGAIN)) {
+                    break;
+                }
+                // EINTR and friends: retry the read.
+                continue;
+            }
+            if (r.value() == 0) {
+                quit = true;
+                break;
+            }
+            last_byte = now();
+            Optional<KeyEvent> o = keys.feed(byte);
+            if (o.is_none()) {
+                seq_open = true;
+                continue;
+            }
+            seq_open = false;
+            KeyEvent e = o.unwrap();
+            activity = true;
+            KeyEvent* ep = &e;
+            bool qr = app.on_key(ep);
+            if (qr) {
+                quit = true;
+                break;
+            }
+        }
+
+        // Lone ESC resolves after a quiet window.
+        if (!quit && seq_open) {
+            Duration quiet = last_byte.elapsed();
+            if (quiet.as_millis() >= ESC_TIMEOUT_MS) {
+                seq_open = false;
+                Optional<KeyEvent> oe = keys.flush();
+                if (!oe.is_none()) {
+                    KeyEvent e2 = oe.unwrap();
+                    activity = true;
+                    bool qr2 = app.on_key(&e2);
+                    if (qr2) {
+                        quit = true;
+                    }
+                }
+            }
+        }
+
+        // Tick hook.
+        if (!quit) {
+            i64 interval = app.tick_ms();
+            if (interval > 0) {
+                Duration since = last_tick.elapsed();
+                if (since.as_millis() >= interval) {
+                    last_tick = now();
+                    app.on_tick(since.as_millis());
+                    activity = true;
+                }
+            }
+        }
+
+        if (activity && !quit) {
+            Frame f = t.frame();
+            app.render(&f);
+            t.flush();
+        }
+        if (!activity && !quit) {
+            sleep_ms(IDLE_SLEEP_MS);
+        }
+    }
+
+    term_exit_alt(&STDOUT);
+    t.show_cursor();
+    STDOUT.flush();
+    if (restd) {
+        try_fcntl(0, F_SETFL, saved_flags);
+    }
+}

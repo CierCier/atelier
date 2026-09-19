@@ -8,3 +8,5 @@ import atelier.terminal;
 import atelier.widgets.block;
 import atelier.widgets.paragraph;
 import atelier.widgets.list;
+import atelier.app;
+import atelier.store;
