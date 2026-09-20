@@ -1,0 +1,472 @@
+// Calendar: month grid with weekday headers, day marks, and selection.
+//
+// The widget is pure presentation config (styles, headers, marks); the
+// displayed month and selected day live in CalendarState owned by the app.
+// Marks index the displayed month only — callers re-mark after month
+// navigation (a "same holiday every month" rule lives above this widget).
+//
+// Date math is local (no std date type): proleptic Gregorian, years >= 1.
+// days_from_civil assumes non-negative years so `/` rounding never matters.
+
+import std.mem.vec;
+import std.fmt;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+
+struct CalendarState {
+    i64 year;
+    u8 month; // 1..12
+    i64 selected; // day-of-month 1..31; 0 = none
+}
+
+impl CalendarState {
+    CalendarState new(i64 year, u8 month) {
+        CalendarState s;
+        s.year = year;
+        s.month = month;
+        s.selected = 0;
+        return move s;
+    }
+
+    // Clamps past-the-end days (Feb 31) instead of rejecting: callers that
+    // hold a selection across month moves stay valid without re-checking.
+    void select(&mut self, i64 day) {
+        if (day < 0) {
+            day = 0;
+        }
+        i64 dim = days_in_month(self.year, (i64)self.month);
+        if (day > dim) {
+            day = dim;
+        }
+        self.selected = day;
+    }
+
+    void move_month(&mut self, i64 delta) {
+        // Bounded so an extreme delta cannot spin the wrap loops for years.
+        if (delta < -120000) {
+            delta = -120000;
+        }
+        if (delta > 120000) {
+            delta = 120000;
+        }
+        i64 m = (i64)self.month + delta;
+        i64 y = self.year;
+        while (m < 1) {
+            m = m + 12;
+            y = y - 1;
+        }
+        while (m > 12) {
+            m = m - 12;
+            y = y + 1;
+        }
+        self.month = (u8)m;
+        self.year = y;
+        self.select(self.selected);
+    }
+
+    // Steps selection by `delta` days, rolling across month boundaries in
+    // either direction. A cleared selection (0) enters at the near edge.
+    void move_selection(&mut self, i64 delta) {
+        if (delta == 0) {
+            return;
+        }
+        if (self.selected <= 0) {
+            if (delta > 0) {
+                self.selected = 1;
+                delta = delta - 1;
+            } else {
+                self.selected = days_in_month(self.year, (i64)self.month);
+                delta = delta + 1;
+            }
+            if (delta == 0) {
+                return;
+            }
+        }
+        i64 day = self.selected + delta;
+        i64 guard = 0;
+        while ((day < 1 || day > days_in_month(self.year, (i64)self.month)) && guard < 500) {
+            if (day < 1) {
+                self.move_month(-1);
+                day = day + days_in_month(self.year, (i64)self.month);
+            } else {
+                day = day - days_in_month(self.year, (i64)self.month);
+                self.move_month(1);
+            }
+            guard = guard + 1;
+        }
+        self.selected = day;
+    }
+}
+
+struct DayMark {
+    bool on;
+}
+
+impl DayMark {
+    DayMark new() {
+        DayMark m;
+        m.on = false;
+        return m;
+    }
+}
+
+struct Calendar {
+    bool monday_first;
+    bool show_month_header;
+    bool show_week_header;
+    bool show_surrounding;
+    Vec<DayMark> marks;
+    UpdateInterval cadence;
+    Style style;
+    Style header_style;
+    Style week_style;
+    Style day_style;
+    Style muted_style;
+    Style selected_style;
+    Style mark_style;
+    Block block;
+    bool has_block;
+}
+
+impl Calendar {
+    Calendar new() {
+        Calendar c;
+        c.monday_first = false;
+        c.show_month_header = true;
+        c.show_week_header = true;
+        c.show_surrounding = false;
+        c.marks = Vec<DayMark>.new();
+        c.cadence = UpdateInterval.new(0);
+        c.style = Style.new();
+        c.header_style = Style.new().bold();
+        c.week_style = Style.new().fg(Color.BrightBlack);
+        c.day_style = Style.new();
+        c.muted_style = Style.new().fg(Color.BrightBlack);
+        c.selected_style = Style.new().reversed();
+        c.mark_style = Style.new().fg(Color.Red).bold();
+        c.block = Block.new();
+        c.has_block = false;
+        return move c;
+    }
+
+    Calendar monday_first(Calendar self, bool monday) {
+        self.monday_first = monday;
+        return move self;
+    }
+
+    Calendar show_month_header(Calendar self, bool show) {
+        self.show_month_header = show;
+        return move self;
+    }
+
+    Calendar show_week_header(Calendar self, bool show) {
+        self.show_week_header = show;
+        return move self;
+    }
+
+    Calendar show_surrounding(Calendar self, bool show) {
+        self.show_surrounding = show;
+        return move self;
+    }
+
+    Calendar style(Calendar self, Style style) {
+        self.style = style;
+        return move self;
+    }
+
+    Calendar header_style(Calendar self, Style style) {
+        self.header_style = style;
+        return move self;
+    }
+
+    Calendar week_style(Calendar self, Style style) {
+        self.week_style = style;
+        return move self;
+    }
+
+    Calendar day_style(Calendar self, Style style) {
+        self.day_style = style;
+        return move self;
+    }
+
+    Calendar muted_style(Calendar self, Style style) {
+        self.muted_style = style;
+        return move self;
+    }
+
+    Calendar selected_style(Calendar self, Style style) {
+        self.selected_style = style;
+        return move self;
+    }
+
+    Calendar mark_style(Calendar self, Style style) {
+        self.mark_style = style;
+        return move self;
+    }
+
+    Calendar block(Calendar self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return move self;
+    }
+
+    Calendar update_interval(Calendar self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return move self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+
+    // Marks grow on demand; clearing zeroes in place so the Vec never
+    // reallocates away (a fresh Vec would drop the old storage untracked).
+    void mark_day(&mut self, i64 day) {
+        if (day < 1) {
+            return;
+        }
+        while (self.marks.len() < day) {
+            self.marks.push(DayMark.new());
+        }
+        DayMark* m = self.marks.get_ptr(day - 1);
+        m.on = true;
+    }
+
+    void clear_marks(&mut self) {
+        for (i64 i = 0; i < self.marks.len(); i = i + 1) {
+            DayMark* m = self.marks.get_ptr(i);
+            m.on = false;
+        }
+    }
+
+    bool marked(&self, i64 day) {
+        if (day < 1 || day > self.marks.len()) {
+            return false;
+        }
+        return self.marks.get(day - 1).on;
+    }
+}
+
+impl StatefulWidget for Calendar {
+    type State = CalendarState;
+
+    // Layout: [month header] [weekday header] up to 6 week rows. Each day
+    // cell is 2 chars right-aligned plus a 1-char gap (20 columns wide).
+    // Cells render through set_string, so a clipped right or bottom edge
+    // truncates instead of wrapping.
+    void render(&self, &Rect area, &mut Buffer buf, &mut CalendarState state) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+        i64 top = (i64)inner.y;
+        i64 bottom = (i64)inner.y + (i64)inner.height;
+        if (self.show_month_header && top < bottom) {
+            String title = @format("{} {}", month_name((i64)state.month), state.year);
+            i64 tw = text_width(title.to_str());
+            i64 tx = (i64)inner.x + ((i64)inner.width - tw) / 2;
+            if (tx < (i64)inner.x) {
+                tx = (i64)inner.x;
+            }
+            buf.set_string(tx, top, title.to_str(), self.header_style, (i64)inner.x + (i64)inner.width - tx);
+            title.drop();
+            top = top + 1;
+        }
+        if (self.show_week_header && top < bottom) {
+            for (i64 col = 0; col < 7; col = col + 1) {
+                i64 x = (i64)inner.x + col * 3;
+                if (x + 1 >= (i64)inner.x + (i64)inner.width) {
+                    break;
+                }
+                buf.set_string(x, top, weekday_label(col, self.monday_first), self.week_style, 2);
+            }
+            top = top + 1;
+        }
+        i64 dim = days_in_month(state.year, (i64)state.month);
+        i64 leading = month_first_weekday(state.year, (i64)state.month, self.monday_first);
+        // Adjacent-month neighbors for the dimmed filler days.
+        i64 pm = (i64)state.month - 1;
+        i64 py = state.year;
+        if (pm < 1) {
+            pm = 12;
+            py = py - 1;
+        }
+        i64 prev_dim = days_in_month(py, pm);
+        i64 nm = (i64)state.month + 1;
+        i64 ny = state.year;
+        if (nm > 12) {
+            nm = 1;
+            ny = ny + 1;
+        }
+        for (i64 week = 0; week < 6 && top < bottom; week = week + 1) {
+            for (i64 col = 0; col < 7; col = col + 1) {
+                i64 x = (i64)inner.x + col * 3;
+                if (x >= (i64)inner.x + (i64)inner.width) {
+                    break;
+                }
+                i64 grid = week * 7 + col;
+                i64 day = 0; // 0 = not a rendered day (blank or filler-skipped)
+                bool adjacent = false;
+                if (grid < leading) {
+                    if (self.show_surrounding) {
+                        day = prev_dim - leading + grid + 1;
+                        adjacent = true;
+                    }
+                } else {
+                    i64 rel = grid - leading;
+                    if (rel < dim) {
+                        day = rel + 1;
+                    } else if (self.show_surrounding) {
+                        day = rel - dim + 1;
+                        adjacent = true;
+                    }
+                }
+                if (day <= 0) {
+                    continue;
+                }
+                Style st = self.day_style;
+                if (adjacent) {
+                    st = st.patch(self.muted_style);
+                } else {
+                    if (self.marked(day)) {
+                        st = st.patch(self.mark_style);
+                    }
+                    // A selection held across a month move may exceed the
+                    // month length; it simply highlights nothing here.
+                    if (day == state.selected && day <= dim) {
+                        st = st.patch(self.selected_style);
+                    }
+                }
+                // Two-char right-aligned cell: units digit always in the
+                // second column so 4 and 15 share a column.
+                if (day >= 10) {
+                    buf.set_string(x, top, digit_str(day / 10), st, 1);
+                }
+                buf.set_string(x + 1, top, digit_str(day % 10), st, 1);
+            }
+            top = top + 1;
+        }
+    }
+}
+
+/// Days in a month, proleptic Gregorian.
+i64 days_in_month(i64 year, i64 month) {
+    if (month == 1 || month == 3 || month == 5 || month == 7 || month == 8 || month == 10 || month == 12) {
+        return 31;
+    }
+    if (month == 4 || month == 6 || month == 9 || month == 11) {
+        return 30;
+    }
+    if (is_leap_year(year)) {
+        return 29;
+    }
+    return 28;
+}
+
+bool is_leap_year(i64 year) {
+    if (year % 4 != 0) {
+        return false;
+    }
+    if (year % 100 != 0) {
+        return true;
+    }
+    return year % 400 == 0;
+}
+
+/// Column of the month's first day: 0 = first column for the chosen week
+/// start (Sunday- or Monday-first). Negative day counts normalize by
+/// adding a full week so pre-epoch dates land correctly.
+i64 month_first_weekday(i64 year, i64 month, bool monday_first) {
+    i64 days = days_from_civil(year, month, 1);
+    i64 wd = (days + 4) % 7; // 0 = Sunday
+    if (wd < 0) {
+        wd = wd + 7;
+    }
+    if (monday_first) {
+        wd = wd - 1;
+        if (wd < 0) {
+            wd = 6;
+        }
+    }
+    return wd;
+}
+
+/// Days since 1970-01-01 (Howard Hinnant's days_from_civil). Years < 1
+/// are unsupported: the era division assumes non-negative operands.
+i64 days_from_civil(i64 y, i64 m, i64 d) {
+    i64 yy = y;
+    i64 mp = m;
+    if (m <= 2) {
+        yy = yy - 1;
+        mp = m + 9;
+    } else {
+        mp = m - 3;
+    }
+    i64 era = yy / 400;
+    i64 yoe = yy - era * 400;
+    i64 doy = (153 * mp + 2) / 5 + d - 1;
+    i64 doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+str month_name(i64 month) {
+    if (month == 1) { return "January"; }
+    if (month == 2) { return "February"; }
+    if (month == 3) { return "March"; }
+    if (month == 4) { return "April"; }
+    if (month == 5) { return "May"; }
+    if (month == 6) { return "June"; }
+    if (month == 7) { return "July"; }
+    if (month == 8) { return "August"; }
+    if (month == 9) { return "September"; }
+    if (month == 10) { return "October"; }
+    if (month == 11) { return "November"; }
+    if (month == 12) { return "December"; }
+    return "";
+}
+
+str weekday_label(i64 col, bool monday_first) {
+    if (monday_first) {
+        if (col == 0) { return "Mo"; }
+        if (col == 1) { return "Tu"; }
+        if (col == 2) { return "We"; }
+        if (col == 3) { return "Th"; }
+        if (col == 4) { return "Fr"; }
+        if (col == 5) { return "Sa"; }
+        return "Su";
+    }
+    if (col == 0) { return "Su"; }
+    if (col == 1) { return "Mo"; }
+    if (col == 2) { return "Tu"; }
+    if (col == 3) { return "We"; }
+    if (col == 4) { return "Th"; }
+    if (col == 5) { return "Fr"; }
+    return "Sa";
+}
+
+str digit_str(i64 digit) {
+    if (digit == 0) { return "0"; }
+    if (digit == 1) { return "1"; }
+    if (digit == 2) { return "2"; }
+    if (digit == 3) { return "3"; }
+    if (digit == 4) { return "4"; }
+    if (digit == 5) { return "5"; }
+    if (digit == 6) { return "6"; }
+    if (digit == 7) { return "7"; }
+    if (digit == 8) { return "8"; }
+    return "9";
+}

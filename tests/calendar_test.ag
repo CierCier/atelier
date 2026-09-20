@@ -1,0 +1,161 @@
+import atelier.widgets.calendar;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import std.test;
+
+i64 codepoint_at(Buffer* buf, i64 x, i64 y) {
+    Cell* c = buf.cell_mut(x, y);
+    if (c == (Cell*)0) {
+        return 0;
+    }
+    return (i64)c.ch;
+}
+
+#[test]
+void calendar_renders_month_header_and_grid() {
+    Calendar cal = Calendar.new();
+    CalendarState st = CalendarState.new(2026, 8);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)21, (u16)9);
+    Buffer buf = Buffer.empty(area);
+    cal.render(&area, &buf, &st);
+    // "August 2026" (11 chars) centers at x=5 in a 21-wide grid.
+    assert_eq_i64(65, codepoint_at(&buf, 5, 0), "header starts with 'A' of August");
+    assert_eq_i64(0x32, codepoint_at(&buf, 12, 0), "header shows year 2026");
+    assert_eq_i64(0x53, codepoint_at(&buf, 0, 1), "week header opens with Su");
+    assert_eq_i64(0x4D, codepoint_at(&buf, 3, 1), "week header second col Mo");
+    // Aug 2026 starts Saturday (leading 6), so row 1 ends with day 01.
+    assert_eq_i64(0x31, codepoint_at(&buf, 19, 2), "day 1 lands Saturday");
+    assert_eq_i64(0x38, codepoint_at(&buf, 19, 3), "day 8 same column next week");
+}
+
+#[test]
+void calendar_month_navigation_wraps_years() {
+    CalendarState st = CalendarState.new(2026, 12);
+    st.move_month(1);
+    assert_eq_i64(2027, st.year, "December wraps forward a year");
+    assert_eq_i64(1, (i64)st.month, "December wraps to January");
+    st.move_month(-1);
+    st.move_month(-1);
+    assert_eq_i64(2026, st.year, "wrapping back lands on 2026");
+    assert_eq_i64(11, (i64)st.month, "wrapping back lands on November");
+    // Selection clamps: Mar 31 -> move_month(-1) -> Feb caps at 29 (2024).
+    CalendarState leap = CalendarState.new(2024, 3);
+    leap.select(31);
+    leap.move_month(-1);
+    assert_eq_i64(29, leap.selected, "Mar 31 clamps to Feb 29 in 2024");
+    assert_eq_i64(2, (i64)leap.month, "clamp move lands on February");
+    CalendarState plain = CalendarState.new(2023, 3);
+    plain.select(31);
+    plain.move_month(-1);
+    assert_eq_i64(28, plain.selected, "Mar 31 clamps to Feb 28 in 2023");
+}
+
+#[test]
+void calendar_day_stepping_rolls_months() {
+    // Aug 2026 has 31 days.
+    CalendarState fwd = CalendarState.new(2026, 8);
+    fwd.select(31);
+    fwd.move_selection(1);
+    assert_eq_i64(9, (i64)fwd.month, "stepping past 31 rolls to September");
+    assert_eq_i64(1, fwd.selected, "roll lands on day 1");
+    // Jul 2026 has 31 days.
+    CalendarState back = CalendarState.new(2026, 7);
+    back.select(1);
+    back.move_selection(-1);
+    assert_eq_i64(6, (i64)back.month, "stepping before 1 rolls back to June");
+    assert_eq_i64(30, back.selected, "roll back lands on day 30");
+    // Feb 2024 (leap): 29 -> Mar 1.
+    CalendarState feb = CalendarState.new(2024, 2);
+    feb.select(29);
+    feb.move_selection(1);
+    assert_eq_i64(3, (i64)feb.month, "leap Feb 29 rolls to March");
+    assert_eq_i64(1, feb.selected, "leap roll lands on day 1");
+    // Cleared selection enters at the near edge.
+    CalendarState none = CalendarState.new(2026, 8);
+    none.move_selection(1);
+    assert_eq_i64(1, none.selected, "cleared selection enters at day 1");
+    CalendarState none_back = CalendarState.new(2026, 8);
+    none_back.move_selection(-1);
+    assert_eq_i64(31, none_back.selected, "cleared selection enters at month end");
+}
+
+#[test]
+void calendar_marks_style_days() {
+    Calendar cal = Calendar.new();
+    cal.mark_day(4);
+    cal.mark_day(15);
+    CalendarState st = CalendarState.new(2026, 8);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)21, (u16)9);
+    Buffer buf = Buffer.empty(area);
+    cal.render(&area, &buf, &st);
+    // Aug 4 2026 is Tuesday (col 2) in week row 1; units digit at x = 7, y = 3.
+    Color red = Color.Red;
+    assert_true(buf.cell_mut(7, 3).fg == red, "marked day renders red");
+    assert_eq_i64(0x34, codepoint_at(&buf, 7, 3), "marked day 4 renders");
+    // Aug 15 is Saturday (col 6), week row 2: units digit at x = 19, y = 4.
+    assert_true(buf.cell_mut(19, 4).fg == red, "day 15 marked cell red");
+    assert_eq_i64(0x35, codepoint_at(&buf, 19, 4), "day 15 units digit renders");
+    cal.clear_marks();
+    assert_false(cal.marked(4), "clear_marks drops day 4");
+    assert_false(cal.marked(15), "clear_marks drops day 15");
+    assert_eq_i64(15, cal.marks.len(), "clear keeps storage for re-marking");
+    // Re-mark after clear reuses storage.
+    cal.mark_day(15);
+    assert_true(cal.marked(15), "re-mark after clear works");
+}
+
+#[test]
+void calendar_selection_and_surrounding() {
+    Calendar cal = Calendar.new().show_surrounding(true);
+    CalendarState st = CalendarState.new(2026, 8);
+    st.select(17);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)21, (u16)9);
+    Buffer buf = Buffer.empty(area);
+    cal.render(&area, &buf, &st);
+    assert_true((buf.cell_mut(4, 5).mods & MOD_REVERSED) != (u16)0, "selected day reversed");
+    assert_eq_i64(0x37, codepoint_at(&buf, 4, 5), "day 17 units digit renders");
+    // Aug 2026: leading slots hold Jul 26-31, trailing slots Sep 1-5.
+    assert_eq_i64(0x36, codepoint_at(&buf, 1, 2), "Jul 26 leads week 0 with surrounding");
+    assert_eq_i64(0x31, codepoint_at(&buf, 7, 7), "Sep 1 trails week 5 with surrounding");
+    // Aug 31 itself is in-month and renders in both variants.
+    assert_eq_i64(0x33, codepoint_at(&buf, 3, 7), "Aug 31 tens digit");
+    // Without surrounding days the filler slots stay empty.
+    Calendar plain = Calendar.new();
+    Buffer plain_buf = Buffer.empty(area);
+    plain.render(&area, &plain_buf, &st);
+    assert_eq_i64(0, codepoint_at(&plain_buf, 1, 2), "no leading filler without show_surrounding");
+    assert_eq_i64(0, codepoint_at(&plain_buf, 7, 7), "no trailing filler without show_surrounding");
+}
+
+#[test]
+void calendar_respects_week_start_and_layout() {
+    Calendar monday = Calendar.new().monday_first(true);
+    CalendarState st = CalendarState.new(2026, 8);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)21, (u16)9);
+    Buffer buf = Buffer.empty(area);
+    monday.render(&area, &buf, &st);
+    assert_eq_i64(0x4D, codepoint_at(&buf, 0, 1), "Mo leads monday-first header");
+    assert_eq_i64(0x53, codepoint_at(&buf, 18, 1), "Su ends monday-first header");
+    // Aug 1 2026 is Saturday: Monday-first leading = 5, day 1 at col 5.
+    assert_eq_i64(0x31, codepoint_at(&buf, 16, 2), "day 1 shifts under monday-first");
+    // Tight layouts truncate instead of crashing.
+    Calendar tiny = Calendar.new().show_month_header(false).show_week_header(false);
+    Rect narrow = Rect.new((u16)0, (u16)0, (u16)8, (u16)2);
+    Buffer narrow_buf = Buffer.empty(narrow);
+    tiny.render(&narrow, &narrow_buf, &st);
+    assert_eq_i64(0, codepoint_at(&narrow_buf, 0, 1), "clipped column 4 is empty");
+    // Day 1 sits in clipped week 0; week 1 opens with day 2 at col 0.
+    assert_eq_i64(0x32, codepoint_at(&narrow_buf, 1, 1), "day 2 units digit shows");
+    Rect flat = Rect.new((u16)0, (u16)0, (u16)21, (u16)1);
+    Buffer flat_buf = Buffer.empty(flat);
+    tiny.render(&flat, &flat_buf, &st);
+    // Only week 0 fits: day 1 shows at its Saturday column, week 1 is dropped.
+    assert_eq_i64(0x31, codepoint_at(&flat_buf, 19, 0), "flat layout shows week 0 day 1");
+    assert_eq_i64(0, codepoint_at(&flat_buf, 1, 0), "flat layout drops week 1");
+    // Weekday math holds across the calendar rules.
+    assert_eq_i64(6, month_first_weekday(2026, 8, false), "Aug 1 2026 is Saturday");
+    assert_eq_i64(5, month_first_weekday(2026, 8, true), "Monday-first shifts to 5");
+    assert_eq_i64(29, days_in_month(2024, 2), "leap February has 29 days");
+    assert_eq_i64(28, days_in_month(2100, 2), "century non-leap has 28 days");
+}

@@ -108,6 +108,7 @@ str component_name(i64 index) {
     if (index == 25) { return "Checklist"; }
     if (index == 26) { return "Log"; }
     if (index == 27) { return "Toasts"; }
+    if (index == 28) { return "Calendar"; }
     return "Buffer";
 }
 
@@ -141,6 +142,7 @@ Vec<ListItem> showcase_items() {
     v.push(ListItem.new("Checklist — multi-select"));
     v.push(ListItem.new("Log — level filter"));
     v.push(ListItem.new("Toasts — expiring notes"));
+    v.push(ListItem.new("Calendar — month grid"));
     return move v;
 }
 
@@ -884,6 +886,22 @@ void render_preview_sample(
                 toasts.push("cache is stale", LogLevel.Warn, (40 - phase) * 100);
             }
             toasts.render(area, buf);
+        } else if (selected == 28) {
+            Calendar cal = Calendar.new().block(Block.new().title("month view")).update_interval(400).show_surrounding(true);
+            i64 frame = update_frame(ticks, cal.update_interval_ms());
+            CalendarState st = CalendarState.new(2026, 9);
+            st.move_month(frame % 3 - 1);
+            if (frame / 6 % 2 == 0) {
+                cal.mark_day(7);
+                cal.mark_day(14);
+                cal.mark_day(21);
+            } else {
+                cal.mark_day(4);
+                cal.mark_day(11);
+                cal.mark_day(25);
+            }
+            st.select(10 + frame % 8);
+            cal.render(area, buf, &st);
         }
     }
 
