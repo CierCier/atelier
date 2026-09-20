@@ -54,6 +54,10 @@ struct LineChart {
     Style axis_style;
     Block block;
     bool has_block;
+    bool show_legend;
+    bool show_x_labels;
+    str x_first;
+    str x_last;
 }
 
 impl LineChart {
@@ -68,6 +72,10 @@ impl LineChart {
         c.axis_style = Style.new().fg(Color.BrightBlack);
         c.block = Block.new();
         c.has_block = false;
+        c.show_legend = false;
+        c.show_x_labels = false;
+        c.x_first = (str)0;
+        c.x_last = (str)0;
         return move c;
     }
 
@@ -94,6 +102,19 @@ impl LineChart {
         return move self;
     }
 
+    // Labels borrow caller text; enabling reserves plot rows (see render).
+    LineChart x_labels(LineChart self, str first, str last) {
+        self.x_first = first;
+        self.x_last = last;
+        self.show_x_labels = true;
+        return move self;
+    }
+
+    LineChart show_legend(LineChart self, bool show) {
+        self.show_legend = show;
+        return move self;
+    }
+
     LineChart update_interval(LineChart self, i64 interval_ms) {
         self.cadence = self.cadence.interval(interval_ms);
         return move self;
@@ -105,6 +126,26 @@ impl LineChart {
 
     i64 advance(&mut self, i64 elapsed_ms) {
         return self.cadence.advance(elapsed_ms);
+    }
+
+    // Top legend row and bottom axis row reserve inner rows, so the plot
+    // below only sees the remaining rows (disabled features change nothing).
+    void render_legend(&self, Rect inner, &mut Buffer buf) {
+        i64 end = (i64)inner.x + (i64)inner.width;
+        i64 lx = (i64)inner.x;
+        i64 ly = (i64)inner.y;
+        for (i64 s = 0; s < self.series.len(); s = s + 1) {
+            if (lx >= end) {
+                break;
+            }
+            ChartSeries* sr = self.series.get_ptr(s);
+            lx = buf.set_string(lx, ly, "•", sr.style, end - lx);
+            lx = buf.set_string(lx, ly, " ", sr.style, end - lx);
+            lx = buf.set_string(lx, ly, sr.label.to_str(), sr.style, end - lx);
+            if (s + 1 < self.series.len()) {
+                lx = buf.set_string(lx, ly, " ", self.style, end - lx);
+            }
+        }
     }
 
     i64 len(&self) {
@@ -173,18 +214,38 @@ impl Widget for LineChart {
         // Gutter labels plus one axis column and one gap column.
         i64 plot_x = (i64)inner.x + gutter + 2;
         i64 plot_w = (i64)inner.x + (i64)inner.width - plot_x;
+        i64 plot_y = (i64)inner.y;
         i64 h = (i64)inner.height;
+        if (self.show_legend && h > 0) {
+            self.render_legend(inner, buf);
+            plot_y = plot_y + 1;
+            h = h - 1;
+        }
+        bool show_x = self.show_x_labels && h > 0;
+        if (show_x) {
+            h = h - 1;
+        }
+        if (show_x) {
+            i64 xy = (i64)inner.y + (i64)inner.height - 1;
+            buf.set_string((i64)inner.x, xy, self.x_first, self.axis_style, (i64)inner.width);
+            i64 last_w = text_width(self.x_last);
+            i64 last_x = (i64)inner.x + (i64)inner.width - last_w;
+            if (last_x < (i64)inner.x) {
+                last_x = (i64)inner.x;
+            }
+            buf.set_string(last_x, xy, self.x_last, self.axis_style, (i64)inner.x + (i64)inner.width - last_x);
+        }
         if (plot_w > 0 && h > 0) {
             i64 axis_x = plot_x - 1;
             for (i64 row = 0; row < h; row = row + 1) {
-                buf.set_string(axis_x, (i64)inner.y + row, "│", self.axis_style, 1);
+                buf.set_string(axis_x, plot_y + row, "│", self.axis_style, 1);
             }
-            buf.set_string((i64)inner.x, (i64)inner.y, top_label.to_str(), self.axis_style, gutter);
+            buf.set_string((i64)inner.x, plot_y, top_label.to_str(), self.axis_style, gutter);
             if (h > 2) {
-                buf.set_string((i64)inner.x, (i64)inner.y + h / 2, mid_label.to_str(), self.axis_style, gutter);
+                buf.set_string((i64)inner.x, plot_y + h / 2, mid_label.to_str(), self.axis_style, gutter);
             }
             if (h > 1) {
-                buf.set_string((i64)inner.x, (i64)inner.y + h - 1, bot_label.to_str(), self.axis_style, gutter);
+                buf.set_string((i64)inner.x, plot_y + h - 1, bot_label.to_str(), self.axis_style, gutter);
             }
         }
         top_label.drop();
@@ -230,7 +291,7 @@ impl Widget for LineChart {
                         hx1 = t;
                     }
                     for (i64 hx = hx0 + 1; hx < hx1; hx = hx + 1) {
-                        buf.set_string(hx, (i64)inner.y + prev_row, "─", sr.style, 1);
+                        buf.set_string(hx, plot_y + prev_row, "─", sr.style, 1);
                     }
                     if (prev_row != row) {
                         i64 from = prev_row;
@@ -241,11 +302,11 @@ impl Widget for LineChart {
                             to = t;
                         }
                         for (i64 r = from + 1; r < to; r = r + 1) {
-                            buf.set_string(x, (i64)inner.y + r, "│", sr.style, 1);
+                            buf.set_string(x, plot_y + r, "│", sr.style, 1);
                         }
                     }
                 }
-                buf.set_string(x, (i64)inner.y + row, "•", sr.style, 1);
+                buf.set_string(x, plot_y + row, "•", sr.style, 1);
                 prev_x = x;
                 prev_row = row;
             }

@@ -1,0 +1,54 @@
+import atelier.widgets.select;
+import atelier.widgets.list;
+import atelier.buffer;
+import atelier.layout;
+import std.test;
+
+#[test]
+void checklist_renders_boxes_and_counts() {
+    Vec<CheckItem> items = Vec<CheckItem>.new();
+    items.push(CheckItem.new("a"));
+    items.push(CheckItem.checked("b"));
+    Checklist list = Checklist.new(move items);
+    assert_eq_i64(1, list.checked_count(), "one pre-checked item");
+    ListState state = ListState.new();
+    Rect area = Rect.new((u16)0, (u16)0, (u16)8, (u16)2);
+    Buffer buf = Buffer.empty(area);
+    list.render(&area, &buf, &state);
+    assert_eq_i64(91, (i64)buf.cell_mut(0, 0).ch, "unchecked box opens");
+    assert_eq_i64(120, (i64)buf.cell_mut(1, 1).ch, "checked box marks x");
+    assert_eq_i64(98, (i64)buf.cell_mut(4, 1).ch, "label follows box");
+}
+
+#[test]
+void toggle_flips_selected_item() {
+    Vec<CheckItem> items = Vec<CheckItem>.new();
+    items.push(CheckItem.new("a"));
+    items.push(CheckItem.new("b"));
+    Checklist list = Checklist.new(move items);
+    ListState state = ListState.new();
+    state.select(0);
+    list.toggle_selected(&state);
+    assert_eq_i64(1, list.checked_count(), "toggle checks");
+    list.toggle_selected(&state);
+    assert_eq_i64(0, list.checked_count(), "toggle again unchecks");
+    state.select(99);
+    list.toggle_selected(&state);
+    assert_eq_i64(0, list.checked_count(), "out-of-range toggle is a no-op");
+}
+
+#[test]
+void checklist_scrolls_like_list() {
+    Vec<CheckItem> items = Vec<CheckItem>.new();
+    items.push(CheckItem.new("a"));
+    items.push(CheckItem.new("b"));
+    items.push(CheckItem.new("c"));
+    Checklist list = Checklist.new(move items);
+    ListState state = ListState.new();
+    state.select(2);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)8, (u16)2);
+    Buffer buf = Buffer.empty(area);
+    list.render(&area, &buf, &state);
+    assert_eq_i64(1, state.offset, "offset follows selection");
+    assert_eq_i64(98, (i64)buf.cell_mut(4, 0).ch, "second item on top");
+}

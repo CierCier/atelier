@@ -8,7 +8,6 @@ import atelier.widget;
 import std.test;
 
 String cell_string(Buffer* b, i64 x, i64 y, i64 n) {
-    // Read n cells as codepoints into an owned String for comparison.
     String s = String.new();
     for (i64 i = 0; i < n; i = i + 1) {
         Cell* c = b.cell_mut(x + i, y);
@@ -19,50 +18,50 @@ String cell_string(Buffer* b, i64 x, i64 y, i64 n) {
     return move s;
 }
 
-i32 main() {
-    test_start("plain render in block");
-    {
-        Rect a = Rect.new((u16)0, (u16)0, (u16)10, (u16)4);
-        Buffer b = Buffer.empty(a);
-        Text t = Text.from("hello");
-        Paragraph p = Paragraph.new(move t).block(Block.new().title("t"));
-        p.render(&a, &b);
-        String got = cell_string(&b, 1, 1, 5);
-        assert_true(got.equals("hello"), "text inside block");
-        assert_eq_i64(0x250C, (i64)b.cell_mut(0, 0).ch, "block corner");
-    }
-    test_start("word wrap");
-    {
-        Rect a = Rect.new((u16)0, (u16)0, (u16)6, (u16)4);
-        Buffer b = Buffer.empty(a);
-        Text t = Text.from("aa bb cc dd");
-        Paragraph p = Paragraph.new(move t);
-        p.render(&a, &b);
-        String r0 = cell_string(&b, 0, 0, 6);
-        assert_true(r0.equals("aa bb "), "first visual row");
-        String r1 = cell_string(&b, 0, 1, 6);
-        assert_true(r1.equals("cc dd "), "second visual row");
-    }
-    test_start("scroll selects window");
-    {
-        Rect a = Rect.new((u16)0, (u16)0, (u16)6, (u16)2);
-        Buffer b = Buffer.empty(a);
-        Text t = Text.from("one\ntwo\nthree");
-        Paragraph p = Paragraph.new(move t).scroll((u16)0, (u16)1);
-        p.render(&a, &b);
-        String s0 = cell_string(&b, 0, 0, 6);
-        assert_true(s0.equals("two   "), "scrolled past first");
-        String s1 = cell_string(&b, 0, 1, 6);
-        assert_true(s1.equals("three "), "second visible");
-    }
-    test_start("paragraph alignment affects rendering");
-    {
-        Rect a = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
-        Buffer b = Buffer.empty(a);
-        Text t = Text.from("x");
-        Paragraph p = Paragraph.new(move t).alignment(Alignment.Center);
-        p.render(&a, &b);
-        assert_eq_i64(120, (i64)b.cell_mut(3, 0).ch, "centered text");
-    }
-    return done();
+#[test]
+void plain_render_in_block() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)10, (u16)4);
+    Buffer b = Buffer.empty(a);
+    Text t = Text.from("hello");
+    Paragraph p = Paragraph.new(move t).block(Block.new().title("t"));
+    p.render(&a, &b);
+    String got = cell_string(&b, 1, 1, 5);
+    assert_true(got.equals("hello"), "text inside block");
+    assert_eq_i64(0x250C, (i64)b.cell_mut(0, 0).ch, "block corner");
+}
+
+#[test]
+void word_wrap() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)6, (u16)4);
+    Buffer b = Buffer.empty(a);
+    Text t = Text.from("aa bb cc dd");
+    Paragraph p = Paragraph.new(move t);
+    p.render(&a, &b);
+    String r0 = cell_string(&b, 0, 0, 6);
+    assert_true(r0.equals("aa bb "), "first visual row");
+    String r1 = cell_string(&b, 0, 1, 6);
+    assert_true(r1.equals("cc dd "), "second visual row");
+}
+
+#[test]
+void scroll_selects_window() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)6, (u16)2);
+    Buffer b = Buffer.empty(a);
+    Text t = Text.from("one\ntwo\nthree");
+    Paragraph p = Paragraph.new(move t).scroll((u16)0, (u16)1);
+    p.render(&a, &b);
+    String s0 = cell_string(&b, 0, 0, 6);
+    assert_true(s0.equals("two   "), "scrolled past first");
+    String s1 = cell_string(&b, 0, 1, 6);
+    assert_true(s1.equals("three "), "second visible");
+}
+
+#[test]
+void alignment_affects_rendering() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
+    Buffer b = Buffer.empty(a);
+    Text t = Text.from("x");
+    Paragraph p = Paragraph.new(move t).alignment(Alignment.Center);
+    p.render(&a, &b);
+    assert_eq_i64(120, (i64)b.cell_mut(3, 0).ch, "centered text");
 }

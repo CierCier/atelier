@@ -33,6 +33,10 @@ struct Terminal {
     Style pen;
     i64 pen_x;
     i64 pen_y;
+    // Inline viewports address cells relative to a reserved scrollback
+    // region (absolute moves would land on screen top); fullscreen uses
+    // absolute moves. pen stays exact in both modes.
+    bool relative;
 }
 
 /// Encode one codepoint as UTF-8 into the writer (surrogates become '?').
@@ -161,6 +165,7 @@ impl Terminal {
         t.pen = Style.new();
         t.pen_x = -1;
         t.pen_y = -1;
+        t.relative = false;
         return move t;
     }
 
@@ -177,6 +182,71 @@ impl Terminal {
             }
         }
         return Terminal.new(out, Rect.new((u16)0, (u16)0, (u16)cols, (u16)rows));
+    }
+
+    /// Fixed-height region in the scrollback (agent CLIs): no alt screen,
+    // content persists above and below after exit. Width still tracks tty.
+    Terminal inline(BufWriter* out, u16 height) {
+        i64 cols = 80;
+        Result<TermSize, Error> r = term_get_size(0);
+        if (r.is_ok()) {
+            TermSize t = r.unwrap();
+            if (t.cols > 0) {
+                cols = t.cols;
+            }
+        }
+        Terminal t = Terminal.new(out, Rect.new((u16)0, (u16)0, (u16)cols, height));
+        t.relative = true;
+        return move t;
+    }
+
+    /// Reserve the region: CRLF per row scrolls it into view, then up to
+    // its top-left. Pen starts exact so all later moves stay relative.
+    void enter_inline(&mut self) {
+        i64 h = (i64)self.area.height;
+        for (i64 i = 0; i < h; i = i + 1) {
+            self.out.write_u8((u8)13);
+            self.out.write_u8((u8)10);
+        }
+        if (h > 0) {
+            term_cursor_up(self.out, h);
+        }
+        self.out.flush();
+        self.pen_x = 0;
+        self.pen_y = 0;
+    }
+
+    /// Drop the cursor below the region; the region itself stays put.
+    void exit_inline(&mut self) {
+        i64 down = (i64)self.area.height - self.pen_y;
+        if (down < 1) {
+            down = 1;
+        }
+        term_cursor_down(self.out, down);
+        self.out.flush();
+    }
+
+    /// Single funnel for every cursor move: absolute in fullscreen,
+    // relative deltas in inline mode (n=0 would emit as 1, so skip axes).
+    void goto_cell(&mut self, i64 x, i64 y) {
+        if (!self.relative) {
+            term_move_to(self.out, y + 1, x + 1);
+        } else {
+            i64 dy = y - self.pen_y;
+            if (dy < 0) {
+                term_cursor_up(self.out, 0 - dy);
+            } else if (dy > 0) {
+                term_cursor_down(self.out, dy);
+            }
+            i64 dx = x - self.pen_x;
+            if (dx < 0) {
+                term_cursor_back(self.out, 0 - dx);
+            } else if (dx > 0) {
+                term_cursor_forward(self.out, dx);
+            }
+        }
+        self.pen_x = x;
+        self.pen_y = y;
     }
 
     /// Start a fresh frame. Widgets are immediate-mode: every cell must be
@@ -200,6 +270,13 @@ impl Terminal {
         self.out.flush();
     }
 
+    // Hardware cursor for focused inputs (TextInput.cursor_pos supplies the
+    // cell). Tracks pen so the next flush skips its own move when adjacent.
+    void place_cursor(&mut self, i64 x, i64 y) {
+        self.goto_cell(x, y);
+        self.out.flush();
+    }
+
     /// Diff the back buffer to the screen, then rotate buffers. The new
     /// back buffer keeps its (stale) contents: the application re-renders
     /// fully every frame, and untouched cells diff clean.
@@ -216,7 +293,7 @@ impl Terminal {
                 continue;
             }
             if (x != self.pen_x || y != self.pen_y) {
-                term_move_to(self.out, y + 1, x + 1);
+                self.goto_cell(x, y);
             }
             Style cs;
             cs.fg = u.cell.fg;
@@ -255,6 +332,18 @@ impl Terminal {
 
     /// Erase the screen and forget all state (forces a full redraw next).
     void clear(&mut self) {
+        if (self.relative) {
+            // Absolute erase would wipe scrollback above: blank region rows.
+            for (i64 row = 0; row < (i64)self.area.height; row = row + 1) {
+                self.goto_cell(0, row);
+                term_erase_line(self.out);
+            }
+            self.out.flush();
+            self.cur.reset();
+            self.prev.reset();
+            self.pen = Style.new();
+            return;
+        }
         term_erase_screen(self.out);
         term_move_to(self.out, 1, 1);
         self.out.flush();
@@ -278,7 +367,11 @@ impl Terminal {
         self.cur.resize(a);
         self.prev.resize(a);
         self.pen = Style.new();
-        self.pen_x = -1;
-        self.pen_y = -1;
+        // Relative pen must stay exact (deltas derive from it); absolute
+        // positioning re-anchors freely.
+        if (!self.relative) {
+            self.pen_x = -1;
+            self.pen_y = -1;
+        }
     }
 }

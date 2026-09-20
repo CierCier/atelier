@@ -6,47 +6,109 @@ import atelier.text;
 import atelier.widget;
 import std.test;
 
-i32 main() {
-    test_start("full border and inner");
-    {
-        Rect a = Rect.new((u16)0, (u16)0, (u16)6, (u16)4);
-        Buffer b = Buffer.empty(a);
-        Block blk = Block.new();
-        blk.render(&a, &b);
-        Cell* tl = b.cell_mut(0, 0);
-        assert_eq_i64(0x250C, (i64)tl.ch, "top-left corner");
-        Cell* br = b.cell_mut(5, 3);
-        assert_eq_i64(0x2518, (i64)br.ch, "bottom-right corner");
-        Cell* mid = b.cell_mut(2, 0);
-        assert_eq_i64(0x2500, (i64)mid.ch, "top edge");
-        Cell* side = b.cell_mut(0, 2);
-        assert_eq_i64(0x2502, (i64)side.ch, "left edge");
-        Rect inner = blk.inner(a);
-        assert_eq_i64(1, (i64)inner.x, "inner x");
-        assert_eq_i64(1, (i64)inner.y, "inner y");
-        assert_eq_i64(4, (i64)inner.width, "inner w");
-        assert_eq_i64(2, (i64)inner.height, "inner h");
-    }
-    test_start("title and partial borders");
-    {
-        Rect a = Rect.new((u16)0, (u16)0, (u16)10, (u16)3);
-        Buffer b = Buffer.empty(a);
-        Block blk = Block.new().borders(BORDER_TOP | BORDER_BOTTOM).title("hi");
-        blk.render(&a, &b);
-        Cell* t = b.cell_mut(1, 0);
-        assert_eq_i64(104, (i64)t.ch, "title first char");
-        Cell* no_left = b.cell_mut(0, 1);
-        assert_eq_i64(0, (i64)no_left.ch, "no left border, middle empty");
-    }
-    test_start("padding is inside borders");
-    {
-        Rect a = Rect.new((u16)0, (u16)0, (u16)10, (u16)5);
-        Block blk = Block.new().padding((u16)1);
-        Rect inner = blk.inner(a);
-        assert_eq_i64(2, (i64)inner.x, "padding x");
-        assert_eq_i64(2, (i64)inner.y, "padding y");
-        assert_eq_i64(6, (i64)inner.width, "padding width");
-        assert_eq_i64(1, (i64)inner.height, "padding height");
-    }
-    return done();
+#[test]
+void block_full_border_and_inner() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)6, (u16)4);
+    Buffer b = Buffer.empty(a);
+    Block blk = Block.new();
+    blk.render(&a, &b);
+    Cell* tl = b.cell_mut(0, 0);
+    assert_eq_i64(0x250C, (i64)tl.ch, "top-left corner");
+    Cell* br = b.cell_mut(5, 3);
+    assert_eq_i64(0x2518, (i64)br.ch, "bottom-right corner");
+    Cell* mid = b.cell_mut(2, 0);
+    assert_eq_i64(0x2500, (i64)mid.ch, "top edge");
+    Cell* side = b.cell_mut(0, 2);
+    assert_eq_i64(0x2502, (i64)side.ch, "left edge");
+    Rect inner = blk.inner(a);
+    assert_eq_i64(1, (i64)inner.x, "inner x");
+    assert_eq_i64(1, (i64)inner.y, "inner y");
+    assert_eq_i64(4, (i64)inner.width, "inner w");
+    assert_eq_i64(2, (i64)inner.height, "inner h");
+}
+
+#[test]
+void block_title_and_partial_borders() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)10, (u16)3);
+    Buffer b = Buffer.empty(a);
+    Block blk = Block.new().borders(BORDER_TOP | BORDER_BOTTOM).title("hi");
+    blk.render(&a, &b);
+    Cell* t = b.cell_mut(1, 0);
+    assert_eq_i64(104, (i64)t.ch, "title first char");
+    Cell* no_left = b.cell_mut(0, 1);
+    assert_eq_i64(0, (i64)no_left.ch, "no left border, middle empty");
+}
+
+#[test]
+void block_padding_is_inside_borders() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)10, (u16)5);
+    Block blk = Block.new().padding((u16)1);
+    Rect inner = blk.inner(a);
+    assert_eq_i64(2, (i64)inner.x, "padding x");
+    assert_eq_i64(2, (i64)inner.y, "padding y");
+    assert_eq_i64(6, (i64)inner.width, "padding width");
+    assert_eq_i64(1, (i64)inner.height, "padding height");
+}
+
+#[test]
+void block_rounded_corners() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)6, (u16)4);
+    Buffer b = Buffer.empty(a);
+    Block blk = Block.new().border_type(BorderType.Rounded);
+    blk.render(&a, &b);
+    assert_eq_i64(0x256D, (i64)b.cell_mut(0, 0).ch, "rounded top-left");
+    assert_eq_i64(0x256E, (i64)b.cell_mut(5, 0).ch, "rounded top-right");
+    assert_eq_i64(0x2570, (i64)b.cell_mut(0, 3).ch, "rounded bottom-left");
+    assert_eq_i64(0x256F, (i64)b.cell_mut(5, 3).ch, "rounded bottom-right");
+    assert_eq_i64(0x2500, (i64)b.cell_mut(2, 0).ch, "rounded keeps single top edge");
+    assert_eq_i64(0x2502, (i64)b.cell_mut(0, 2).ch, "rounded keeps single left edge");
+}
+
+#[test]
+void block_double_edges() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)6, (u16)4);
+    Buffer b = Buffer.empty(a);
+    Block blk = Block.new().border_type(BorderType.Double);
+    blk.render(&a, &b);
+    assert_eq_i64(0x2554, (i64)b.cell_mut(0, 0).ch, "double top-left");
+    assert_eq_i64(0x2557, (i64)b.cell_mut(5, 0).ch, "double top-right");
+    assert_eq_i64(0x255A, (i64)b.cell_mut(0, 3).ch, "double bottom-left");
+    assert_eq_i64(0x255D, (i64)b.cell_mut(5, 3).ch, "double bottom-right");
+    assert_eq_i64(0x2550, (i64)b.cell_mut(2, 0).ch, "double top edge");
+    assert_eq_i64(0x2551, (i64)b.cell_mut(0, 2).ch, "double left edge");
+}
+
+#[test]
+void block_bottom_title_row() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)10, (u16)3);
+    Buffer b = Buffer.empty(a);
+    Block blk = Block.new().borders(BORDER_TOP | BORDER_BOTTOM).title("hi").title_position(TitlePosition.Bottom);
+    blk.render(&a, &b);
+    assert_eq_i64(104, (i64)b.cell_mut(1, 2).ch, "title on bottom border row");
+    assert_eq_i64(105, (i64)b.cell_mut(2, 2).ch, "title second char on bottom row");
+    assert_eq_i64(0x2500, (i64)b.cell_mut(1, 0).ch, "top row keeps plain edge");
+    Rect inner = blk.inner(a);
+    assert_eq_i64(0, (i64)inner.x, "bottom title keeps inner x");
+    assert_eq_i64(1, (i64)inner.y, "bottom title keeps inner y");
+    assert_eq_i64(10, (i64)inner.width, "bottom title keeps inner w");
+    assert_eq_i64(1, (i64)inner.height, "bottom title keeps inner h");
+}
+
+#[test]
+void block_shadow_styles_outside_cells() {
+    Rect big = Rect.new((u16)0, (u16)0, (u16)8, (u16)6);
+    Buffer b = Buffer.empty(big);
+    Rect a = Rect.new((u16)0, (u16)0, (u16)6, (u16)4);
+    Style sh = Style.new().fg(Color.Red);
+    Block blk = Block.new().shadow(sh);
+    blk.render(&a, &b);
+    Color red = Color.Red;
+    assert_true(b.cell_mut(6, 1).fg == red, "shadow right of block");
+    assert_true(b.cell_mut(1, 4).fg == red, "shadow below block");
+    assert_true(b.cell_mut(6, 4).fg == red, "shadow bottom-right corner");
+    assert_eq_i64(0x2518, (i64)b.cell_mut(5, 3).ch, "border intact under shadow");
+    Buffer plain_buf = Buffer.empty(big);
+    Block plain = Block.new();
+    plain.render(&a, &plain_buf);
+    assert_true(!(plain_buf.cell_mut(6, 1).fg == red), "no shadow by default");
 }

@@ -8,6 +8,7 @@ import atelier.style;
 import atelier.text;
 import atelier.update;
 import atelier.widget;
+import atelier.app;
 import atelier.widgets.block;
 
 struct TextInputState {
@@ -102,6 +103,8 @@ struct TextInput {
     Style placeholder_style;
     Block block;
     bool has_block;
+    bool masked;
+    bool focused;
 }
 
 impl TextInput {
@@ -115,6 +118,8 @@ impl TextInput {
         i.placeholder_style = Style.new().dim();
         i.block = Block.new();
         i.has_block = false;
+        i.masked = false;
+        i.focused = false;
         return i;
     }
 
@@ -149,6 +154,18 @@ impl TextInput {
         return self;
     }
 
+    TextInput mask(TextInput self, bool mask) {
+        self.masked = mask;
+        return self;
+    }
+
+    // Focused inputs publish their cursor cell for the app loop's hardware
+    // cursor; unfocused inputs paint the visual cursor only.
+    TextInput focused(TextInput self, bool focused) {
+        self.focused = focused;
+        return self;
+    }
+
     TextInput update_interval(TextInput self, i64 interval_ms) {
         self.cadence = self.cadence.interval(interval_ms);
         return self;
@@ -160,6 +177,71 @@ impl TextInput {
 
     i64 advance(&mut self, i64 elapsed_ms) {
         return self.cadence.advance(elapsed_ms);
+    }
+
+    // Masked bullets are one cell per codepoint, so cursor math counts in
+    // masked cells rather than display widths (wide chars still take one).
+    void render_masked(&self, Rect inner, &mut Buffer buf, &mut TextInputState state, i64 value_x, i64 value_width) {
+        str value = state.value.to_str();
+        u8* p = (u8*)value;
+        i64 len = state.value.len();
+        i64 cursor = state.cursor;
+        if (cursor < 0) { cursor = 0; }
+        if (cursor > len) { cursor = len; }
+        i64 before_cp = text_input_codepoint_count(p, cursor);
+        i64 start = text_input_scroll_start_masked(value, p, cursor, value_width);
+        i64 start_cp = text_input_codepoint_count(p, start);
+        i64 shown = text_input_codepoint_count(p, len) - start_cp;
+        if (shown > value_width) { shown = value_width; }
+        for (i64 k = 0; k < shown; k = k + 1) {
+            buf.set_cell(value_x + k, (i64)inner.y, (u32)0x2022, self.style);
+        }
+        i64 cursor_x = value_x + before_cp - start_cp;
+        if (cursor_x < value_x) { cursor_x = value_x; }
+        if (cursor_x >= value_x + value_width) { cursor_x = value_x + value_width - 1; }
+        if (self.focused) {
+            focus_set(cursor_x, (i64)inner.y);
+        }
+        if (cursor < len) {
+            buf.set_cell(cursor_x, (i64)inner.y, (u32)0x2022, self.cursor_style);
+        } else {
+            buf.set_cell(cursor_x, (i64)inner.y, (u32)32, self.cursor_style);
+        }
+    }
+
+    // Exact terminal cell of the cursor (mirrors render math for hardware cursors).
+    void cursor_pos(&self, &Rect area, &TextInputState state, i64* out_x, i64* out_y) {
+        Rect inner = *area;
+        if (self.has_block) {
+            inner = self.block.inner(*area);
+        }
+        i64 prompt_width = text_width(self.prompt);
+        if (prompt_width > (i64)inner.width) { prompt_width = (i64)inner.width; }
+        i64 value_x = (i64)inner.x + prompt_width;
+        i64 value_width = (i64)inner.width - prompt_width;
+        if (value_width <= 0) {
+            *out_x = value_x;
+            *out_y = (i64)inner.y;
+            return;
+        }
+        str value = state.value.to_str();
+        u8* p = (u8*)value;
+        i64 cursor = state.cursor;
+        if (cursor < 0) { cursor = 0; }
+        if (cursor > state.value.len()) { cursor = state.value.len(); }
+        i64 start = text_input_scroll_start(value, p, cursor, value_width);
+        i64 before_width = text_input_byte_width(p, cursor);
+        i64 start_width = text_input_byte_width(p, start);
+        if (self.masked) {
+            start = text_input_scroll_start_masked(value, p, cursor, value_width);
+            before_width = text_input_codepoint_count(p, cursor);
+            start_width = text_input_codepoint_count(p, start);
+        }
+        i64 cursor_x = value_x + before_width - start_width;
+        if (cursor_x < value_x) { cursor_x = value_x; }
+        if (cursor_x >= value_x + value_width) { cursor_x = value_x + value_width - 1; }
+        *out_x = cursor_x;
+        *out_y = (i64)inner.y;
     }
 }
 
@@ -184,6 +266,13 @@ impl StatefulWidget for TextInput {
         if (state.value.len() == 0 && self.placeholder != (str)0) {
             buf.set_string(value_x, (i64)inner.y, self.placeholder, self.placeholder_style, value_width);
             buf.set_cell(value_x, (i64)inner.y, (u32)32, self.cursor_style);
+            if (self.focused) {
+                focus_set(value_x, (i64)inner.y);
+            }
+            return;
+        }
+        if (self.masked) {
+            self.render_masked(inner, buf, state, value_x, value_width);
             return;
         }
         str value = state.value.to_str();
@@ -192,24 +281,15 @@ impl StatefulWidget for TextInput {
         if (cursor < 0) { cursor = 0; }
         if (cursor > state.value.len()) { cursor = state.value.len(); }
         i64 before_width = text_input_byte_width(p, cursor);
-        i64 start = 0;
-        if (before_width >= value_width) {
-            // Keep the cursor visible by dropping complete codepoints from the left.
-            i64 visible_start = 0;
-            i64 visible_width = before_width;
-            while (visible_start < cursor && visible_width >= value_width) {
-                i64 next = text_input_next_boundary(value, visible_start);
-                i64 removed = text_input_byte_width(p + visible_start, next - visible_start);
-                visible_start = next;
-                visible_width = visible_width - removed;
-            }
-            start = visible_start;
-        }
+        i64 start = text_input_scroll_start(value, p, cursor, value_width);
         i64 start_width = text_input_byte_width(p, start);
         buf.set_bytes(value_x, (i64)inner.y, p, start, state.value.len(), self.style, value_width);
         i64 cursor_x = value_x + before_width - start_width;
         if (cursor_x < value_x) { cursor_x = value_x; }
         if (cursor_x >= value_x + value_width) { cursor_x = value_x + value_width - 1; }
+        if (self.focused) {
+            focus_set(cursor_x, (i64)inner.y);
+        }
         if (cursor < state.value.len()) {
             i64 idx = cursor;
             u32 cp = utf8_next(p, state.value.len(), &idx);
@@ -265,4 +345,46 @@ i64 text_input_byte_width(u8* p, i64 len) {
         width = width + (i64)char_width(cp);
     }
     return width;
+}
+
+// Codepoint count via the same utf8_next loop (masked cells ignore widths).
+i64 text_input_codepoint_count(u8* p, i64 len) {
+    if (p == (u8*)0 || len <= 0) { return 0; }
+    i64 idx = 0;
+    i64 count = 0;
+    while (idx < len) {
+        utf8_next(p, len, &idx);
+        count = count + 1;
+    }
+    return count;
+}
+
+// Byte offset of the first visible codepoint; shared by render and cursor_pos
+// so both agree on the cursor cell. Drops whole codepoints from the left only
+// when the cursor would otherwise scroll out of view.
+i64 text_input_scroll_start(str value, u8* p, i64 cursor, i64 value_width) {
+    i64 before_width = text_input_byte_width(p, cursor);
+    if (before_width < value_width) { return 0; }
+    i64 visible_start = 0;
+    i64 visible_width = before_width;
+    while (visible_start < cursor && visible_width >= value_width) {
+        i64 next = text_input_next_boundary(value, visible_start);
+        i64 removed = text_input_byte_width(p + visible_start, next - visible_start);
+        visible_start = next;
+        visible_width = visible_width - removed;
+    }
+    return visible_start;
+}
+
+// Masked variant: each dropped codepoint frees exactly one bullet cell.
+i64 text_input_scroll_start_masked(str value, u8* p, i64 cursor, i64 value_width) {
+    i64 before_cp = text_input_codepoint_count(p, cursor);
+    if (before_cp < value_width) { return 0; }
+    i64 visible_start = 0;
+    i64 visible_width = before_cp;
+    while (visible_start < cursor && visible_width >= value_width) {
+        visible_start = text_input_next_boundary(value, visible_start);
+        visible_width = visible_width - 1;
+    }
+    return visible_start;
 }

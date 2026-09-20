@@ -6,11 +6,8 @@ import atelier.text;
 import atelier.widget;
 import std.test;
 
-// Regression test for the update-loop crash: build and render every widget
-// in a tight loop the way the demo does per `u` press. Under --leak-check
-// any per-frame leak fails; a heap-corrupting overflow segfaults.
-i32 main() {
-    test_start("repeated updates do not leak or crash");
+#[test]
+void repeated_updates_do_not_leak_or_crash() {
     Rect area = Rect.new((u16)0, (u16)0, (u16)40, (u16)10);
     for (i64 i = 0; i < 50; i = i + 1) {
         Buffer buf = Buffer.empty(area);
@@ -36,5 +33,4 @@ i32 main() {
         mp.render(&area, &buf);
         msg.drop();
     }
-    return done();
 }

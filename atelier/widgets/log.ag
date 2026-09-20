@@ -1,0 +1,236 @@
+// Log: level-tagged scrolling lines for consoles, servers, and agents.
+// Lines below min_level never render; autoscroll pins the tail, otherwise
+// the external offset selects the window. A positive limit drops the oldest
+// lines on push so long sessions cannot grow the buffer without bound.
+
+import std.mem.vec;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+
+enum LogLevel {
+    Trace;
+    Debug;
+    Info;
+    Warn;
+    Error;
+}
+
+i64 log_level_rank(LogLevel level) {
+    return match level {
+        Trace : 0,
+        Debug : 1,
+        Info : 2,
+        Warn : 3,
+        Error : 4,
+    };
+}
+
+str log_level_tag(LogLevel level) {
+    return match level {
+        Trace : "TRC",
+        Debug : "DBG",
+        Info : "INF",
+        Warn : "WRN",
+        Error : "ERR",
+    };
+}
+
+struct LogLine {
+    String text;
+    LogLevel level;
+    Style style;
+}
+
+impl LogLine {
+    LogLine new(str text, LogLevel level) {
+        LogLine l;
+        l.text = String.from_str(text);
+        l.level = level;
+        l.style = Style.new();
+        return move l;
+    }
+
+    LogLine styled(str text, LogLevel level, Style style) {
+        LogLine l = LogLine.new(text, level);
+        l.style = style;
+        return move l;
+    }
+}
+
+struct LogState {
+    i64 offset;
+}
+
+impl LogState {
+    LogState new() {
+        LogState s;
+        s.offset = 0;
+        return s;
+    }
+}
+
+struct Log {
+    Vec<LogLine> lines;
+    LogLevel min_level;
+    bool autoscroll;
+    i64 limit;
+    UpdateInterval cadence;
+    Style style;
+    Style trace_style;
+    Style debug_style;
+    Style info_style;
+    Style warn_style;
+    Style error_style;
+    Block block;
+    bool has_block;
+}
+
+impl Log {
+    Log new() {
+        Log l;
+        l.lines = Vec<LogLine>.new();
+        l.min_level = LogLevel.Trace;
+        l.autoscroll = true;
+        l.limit = 1000;
+        l.cadence = UpdateInterval.new(0);
+        l.style = Style.new();
+        l.trace_style = Style.new().dim();
+        l.debug_style = Style.new().fg(Color.BrightBlack);
+        l.info_style = Style.new();
+        l.warn_style = Style.new().fg(Color.Yellow).bold();
+        l.error_style = Style.new().fg(Color.Red).bold();
+        l.block = Block.new();
+        l.has_block = false;
+        return move l;
+    }
+
+    void push(&mut self, str text, LogLevel level) {
+        self.lines.push(LogLine.new(text, level));
+        // Trimmed heads are plain scope-exit drops: LogLine owns its text
+        // through the automatic field cascade, no explicit Drop needed.
+        while (self.limit > 0 && self.lines.len() > self.limit) {
+            LogLine _dropped = self.lines.take(0);
+        }
+    }
+
+    Log min_level(Log self, LogLevel level) {
+        self.min_level = level;
+        return move self;
+    }
+
+    Log autoscroll(Log self, bool enabled) {
+        self.autoscroll = enabled;
+        return move self;
+    }
+
+    Log limit(Log self, i64 max_lines) {
+        self.limit = max_lines;
+        return move self;
+    }
+
+    Log level_style(Log self, LogLevel level, Style style) {
+        match level {
+            Trace : { self.trace_style = style; },
+            Debug : { self.debug_style = style; },
+            Info : { self.info_style = style; },
+            Warn : { self.warn_style = style; },
+            Error : { self.error_style = style; },
+        }
+        return move self;
+    }
+
+    Log block(Log self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return move self;
+    }
+
+    Log update_interval(Log self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return move self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+
+    i64 len(&self) {
+        return self.lines.len();
+    }
+
+    Style style_for(&self, LogLevel level) {
+        return match level {
+            Trace : self.trace_style,
+            Debug : self.debug_style,
+            Info : self.info_style,
+            Warn : self.warn_style,
+            Error : self.error_style,
+        };
+    }
+}
+
+impl StatefulWidget for Log {
+    type State = LogState;
+
+    void render(&self, &Rect area, &mut Buffer buf, &mut LogState state) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        i64 height = (i64)inner.height;
+        if (inner.width == (u16)0 || height <= 0) {
+            return;
+        }
+        i64 total = 0;
+        for (i64 i = 0; i < self.lines.len(); i = i + 1) {
+            LogLine* line = self.lines.get_ptr(i);
+            if (log_level_rank(line.level) >= log_level_rank(self.min_level)) {
+                total = total + 1;
+            }
+        }
+        i64 start = total - height;
+        if (!self.autoscroll) {
+            start = state.offset;
+        }
+        if (start < 0) {
+            start = 0;
+        }
+        i64 max_start = total - height;
+        if (max_start < 0) {
+            max_start = 0;
+        }
+        if (start > max_start) {
+            start = max_start;
+        }
+        state.offset = start;
+        i64 y = (i64)inner.y;
+        i64 seen = 0;
+        for (i64 i = 0; i < self.lines.len() && y < (i64)inner.y + height; i = i + 1) {
+            LogLine* line = self.lines.get_ptr(i);
+            if (log_level_rank(line.level) < log_level_rank(self.min_level)) {
+                continue;
+            }
+            if (seen < start) {
+                seen = seen + 1;
+                continue;
+            }
+            seen = seen + 1;
+            Style st = self.style.patch(self.style_for(line.level)).patch(line.style);
+            i64 x = buf.set_string((i64)inner.x, y, log_level_tag(line.level), st.bold(), 3);
+            x = buf.set_string(x, y, " ", st, 1);
+            buf.set_string(x, y, line.text.to_str(), st, (i64)inner.x + (i64)inner.width - x);
+            y = y + 1;
+        }
+    }
+}

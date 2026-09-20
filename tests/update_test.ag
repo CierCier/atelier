@@ -1,16 +1,17 @@
 import atelier.update;
 import std.test;
 
-i32 main() {
-    test_start("update interval preserves elapsed remainder");
+#[test]
+void interval_preserves_elapsed_remainder() {
     UpdateInterval cadence = UpdateInterval.new(100);
     assert_eq_i64(0, cadence.advance(40), "partial interval is not due");
     assert_eq_i64(1, cadence.advance(60), "one interval is due");
     assert_eq_i64(2, cadence.advance(250), "multiple intervals catch up");
     assert_eq_i64(100, cadence.milliseconds(), "configured interval remains stable");
+}
 
-    test_start("zero interval is manual only");
+#[test]
+void zero_interval_is_manual_only() {
     UpdateInterval manual = UpdateInterval.new(0);
     assert_eq_i64(0, manual.advance(1000), "manual cadence does not auto-fire");
-    return done();
 }

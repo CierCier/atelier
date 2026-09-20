@@ -13,7 +13,6 @@ struct ScrollbarState {
     i64 content_length;
     i64 position;
 }
-
 impl ScrollbarState {
     ScrollbarState new(i64 content_length) {
         ScrollbarState s;
@@ -31,12 +30,20 @@ impl ScrollbarState {
     }
 }
 
+enum ScrollbarOrientation {
+    Vertical;
+    Horizontal;
+}
+
 struct Scrollbar {
     UpdateInterval cadence;
+    ScrollbarOrientation orientation;
     Style track_style;
     Style thumb_style;
     str track_symbol;
     str thumb_symbol;
+    str begin_symbol;
+    str end_symbol;
     Block block;
     bool has_block;
 }
@@ -45,13 +52,27 @@ impl Scrollbar {
     Scrollbar new() {
         Scrollbar s;
         s.cadence = UpdateInterval.new(0);
+        s.orientation = ScrollbarOrientation.Vertical;
         s.track_style = Style.new().fg(Color.BrightBlack);
         s.thumb_style = Style.new().fg(Color.White);
         s.track_symbol = "░";
         s.thumb_symbol = "█";
+        s.begin_symbol = (str)0;
+        s.end_symbol = (str)0;
         s.block = Block.new();
         s.has_block = false;
         return s;
+    }
+
+    Scrollbar orientation(Scrollbar self, ScrollbarOrientation orientation) {
+        self.orientation = orientation;
+        return self;
+    }
+
+    Scrollbar end_symbols(Scrollbar self, str begin, str end) {
+        self.begin_symbol = begin;
+        self.end_symbol = end;
+        return self;
     }
 
     Scrollbar track_style(Scrollbar self, Style style) {
@@ -102,27 +123,60 @@ impl StatefulWidget for Scrollbar {
         if (inner.width == (u16)0 || inner.height == (u16)0) {
             return;
         }
-        i64 height = (i64)inner.height;
-        i64 content = state.content_length;
-        if (content < 1) { content = 1; }
-        i64 viewport = height;
-        i64 thumb = height * viewport / content;
-        if (thumb < 1) { thumb = 1; }
-        if (thumb > height) { thumb = height; }
-        i64 max_position = content - viewport;
-        if (max_position < 0) { max_position = 0; }
-        i64 position = state.position;
-        if (position < 0) { position = 0; }
-        if (position > max_position) { position = max_position; }
-        i64 travel = height - thumb;
+        ScrollbarOrientation horizontal_tag = ScrollbarOrientation.Horizontal;
+        bool horizontal = self.orientation == horizontal_tag;
+        i64 length = (i64)inner.height;
+        if (horizontal) {
+            length = (i64)inner.width;
+        }
+        // End symbols cap the track; the thumb travels between them.
+        i64 start = 0;
+        i64 end = length;
+        if (self.begin_symbol != (str)0 && length > 0) {
+            start = 1;
+        }
+        if (self.end_symbol != (str)0 && end - start > 0) {
+            end = end - 1;
+        }
         i64 top = 0;
-        if (max_position > 0) { top = position * travel / max_position; }
-        for (i64 row = 0; row < height; row = row + 1) {
-            if (row >= top && row < top + thumb) {
-                buf.set_string((i64)inner.x, (i64)inner.y + row, self.thumb_symbol, self.thumb_style, 1);
+        i64 size = 0;
+        scrollbar_extent(end - start, state.content_length, state.position, &top, &size);
+        top = top + start;
+        for (i64 i = 0; i < length; i = i + 1) {
+            bool is_thumb = i >= top && i < top + size;
+            str glyph = self.track_symbol;
+            Style st = self.track_style;
+            if (is_thumb) {
+                glyph = self.thumb_symbol;
+                st = self.thumb_style;
+            }
+            if (i == 0 && start > 0) {
+                glyph = self.begin_symbol;
+            }
+            if (i == length - 1 && end < length) {
+                glyph = self.end_symbol;
+            }
+            if (horizontal) {
+                buf.set_string((i64)inner.x + i, (i64)inner.y, glyph, st, 1);
             } else {
-                buf.set_string((i64)inner.x, (i64)inner.y + row, self.track_symbol, self.track_style, 1);
+                buf.set_string((i64)inner.x, (i64)inner.y + i, glyph, st, 1);
             }
         }
     }
+}
+
+/// Thumb offset/size for a track of `length` cells over `content` items.
+void scrollbar_extent(i64 length, i64 content, i64 position, i64* out_top, i64* out_size) {
+    if (content < 1) { content = 1; }
+    i64 size = length * length / content;
+    if (size < 1) { size = 1; }
+    if (size > length) { size = length; }
+    i64 max_position = content - length;
+    if (max_position < 0) { max_position = 0; }
+    if (position < 0) { position = 0; }
+    if (position > max_position) { position = max_position; }
+    i64 top = 0;
+    if (max_position > 0) { top = position * (length - size) / max_position; }
+    *out_top = top;
+    *out_size = size;
 }

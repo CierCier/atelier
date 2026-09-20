@@ -11,14 +11,14 @@ TableRow row(str a, str b) {
     return TableRow.new(move cells);
 }
 
-i32 main() {
-    test_start("table renders columns and selection");
+#[test]
+void table_renders_columns_and_selection() {
     Vec<TableRow> rows = Vec<TableRow>.new();
     rows.push(row("name", "state"));
     rows.push(row("build", "done"));
-    Vec<u16> widths = Vec<u16>.new();
-    widths.push((u16)6);
-    widths.push((u16)6);
+    Vec<Constraint> widths = Vec<Constraint>.new();
+    widths.push(Constraint.Length((u16)6));
+    widths.push(Constraint.Length((u16)6));
     Table table = Table.new(move rows).widths(move widths).header_rows((u16)1);
     TableState state = TableState.new();
     state.select(1);
@@ -28,5 +28,56 @@ i32 main() {
     assert_eq_i64(110, (i64)buf.cell_mut(0, 0).ch, "header text");
     assert_eq_i64(98, (i64)buf.cell_mut(0, 1).ch, "selected row text");
     assert_eq_i64(0x2502, (i64)buf.cell_mut(6, 0).ch, "column separator");
-    return done();
+}
+
+#[test]
+void percentage_and_fill_widths_share_space() {
+    Vec<TableRow> rows = Vec<TableRow>.new();
+    rows.push(row("ab", "cdef"));
+    Vec<Constraint> widths = Vec<Constraint>.new();
+    widths.push(Constraint.Percentage((u16)50));
+    widths.push(Constraint.Fill((u16)1));
+    Table table = Table.new(move rows).widths(move widths);
+    TableState state = TableState.new();
+    Rect area = Rect.new((u16)0, (u16)0, (u16)13, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    table.render(&area, &buf, &state);
+    // 13 cells minus 1 separator = 12: half fixed, rest to the fill column.
+    assert_eq_i64(97, (i64)buf.cell_mut(0, 0).ch, "first column starts");
+    assert_eq_i64(0x2502, (i64)buf.cell_mut(6, 0).ch, "separator after fixed half");
+    assert_eq_i64(99, (i64)buf.cell_mut(7, 0).ch, "fill column follows");
+    assert_eq_i64(102, (i64)buf.cell_mut(10, 0).ch, "fill column reaches its content");
+}
+
+#[test]
+void footer_pins_to_bottom_and_ignores_scroll() {
+    Vec<TableRow> rows = Vec<TableRow>.new();
+    rows.push(row("r0a", "r0b"));
+    rows.push(row("r1a", "r1b"));
+    rows.push(row("r2a", "r2b"));
+    Vec<TableCell> foot = Vec<TableCell>.new();
+    foot.push(TableCell.new("3 rows"));
+    Table table = Table.new(move rows).footer(move foot);
+    TableState state = TableState.new();
+    state.select(2);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)10, (u16)2);
+    Buffer buf = Buffer.empty(area);
+    table.render(&area, &buf, &state);
+    assert_eq_i64(114, (i64)buf.cell_mut(0, 0).ch, "scrolled body row on top");
+    assert_eq_i64(51, (i64)buf.cell_mut(0, 1).ch, "footer pinned to bottom row");
+}
+
+#[test]
+void column_spacing_leaves_blanks() {
+    Vec<TableRow> rows = Vec<TableRow>.new();
+    rows.push(row("ab", "cd"));
+    Table table = Table.new(move rows).column_spacing((u16)1);
+    TableState state = TableState.new();
+    Rect area = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    table.render(&area, &buf, &state);
+    // ab + pad, │(sep), ' '(gap), cd: separator at 3, blank at 4.
+    assert_eq_i64(0x2502, (i64)buf.cell_mut(3, 0).ch, "separator drawn");
+    assert_eq_i64(0, (i64)buf.cell_mut(4, 0).ch, "spacing cell untouched");
+    assert_eq_i64(99, (i64)buf.cell_mut(5, 0).ch, "second column shifted by gap");
 }

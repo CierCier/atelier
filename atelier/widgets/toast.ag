@@ -1,0 +1,131 @@
+// Toasts: transient stacked notifications with TTL expiry. The widget owns
+// its queue; advance() retires elapsed entries, so the application loop
+// feeds it real dt and pushes on events. Levels reuse LogLevel.
+
+import std.mem.vec;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.widget;
+import atelier.widgets.block;
+import atelier.widgets.log;
+
+struct Toast {
+    String text;
+    LogLevel level;
+    i64 ttl_ms;
+    Style style;
+}
+
+impl Toast {
+    Toast new(str text, LogLevel level, i64 ttl_ms) {
+        Toast t;
+        t.text = String.from_str(text);
+        t.level = level;
+        t.ttl_ms = ttl_ms;
+        if (level == LogLevel.Warn) {
+            t.style = Style.new().fg(Color.Yellow).bold();
+        } else if (level == LogLevel.Error) {
+            t.style = Style.new().fg(Color.Red).bold();
+        } else {
+            t.style = Style.new();
+        }
+        return move t;
+    }
+
+    Toast styled(str text, LogLevel level, i64 ttl_ms, Style style) {
+        Toast t = Toast.new(text, level, ttl_ms);
+        t.style = style;
+        return move t;
+    }
+}
+
+struct Toasts {
+    Vec<Toast> items;
+    Style style;
+    Block block;
+    bool has_block;
+}
+
+impl Toasts {
+    Toasts new() {
+        Toasts t;
+        t.items = Vec<Toast>.new();
+        t.style = Style.new();
+        t.block = Block.new();
+        t.has_block = false;
+        return move t;
+    }
+
+    void push(&mut self, str text, LogLevel level, i64 ttl_ms) {
+        self.items.push(Toast.new(text, level, ttl_ms));
+    }
+
+    void push_styled(&mut self, str text, LogLevel level, i64 ttl_ms, Style style) {
+        self.items.push(Toast.styled(text, level, ttl_ms, style));
+    }
+
+    /// Age the queue by elapsed_ms, dropping expired entries first so a
+    // zero-ttl push never renders. Returns live count.
+    i64 advance(&mut self, i64 elapsed_ms) {
+        i64 kept = 0;
+        for (i64 i = 0; i < self.items.len(); i = i + 1) {
+            Toast* toast = self.items.get_ptr(i);
+            toast.ttl_ms = toast.ttl_ms - elapsed_ms;
+            if (toast.ttl_ms > 0) {
+                if (kept != i) {
+                    self.items.swap(kept, i);
+                }
+                kept = kept + 1;
+            }
+        }
+        while (self.items.len() > kept) {
+            Toast _dropped = self.items.pop();
+        }
+        return kept;
+    }
+
+    Toasts style(Toasts self, Style style) {
+        self.style = style;
+        return move self;
+    }
+
+    Toasts block(Toasts self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return move self;
+    }
+
+    i64 len(&self) {
+        return self.items.len();
+    }
+}
+
+impl Widget for Toasts {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+        // Latest toast anchors the bottom row; older stack upward.
+        i64 n = self.items.len();
+        i64 rows = n;
+        if (rows > (i64)inner.height) {
+            rows = (i64)inner.height;
+        }
+        for (i64 r = 0; r < rows; r = r + 1) {
+            Toast* toast = self.items.get_ptr(n - 1 - r);
+            i64 y = (i64)inner.y + (i64)inner.height - 1 - r;
+            Style st = self.style.patch(toast.style);
+            i64 x = buf.set_string((i64)inner.x, y, log_level_tag(toast.level), st.bold(), 3);
+            x = buf.set_string(x, y, " ", st, 1);
+            buf.set_string(x, y, toast.text.to_str(), st, (i64)inner.x + (i64)inner.width - x);
+        }
+    }
+}

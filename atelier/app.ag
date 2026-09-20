@@ -25,8 +25,60 @@ trait App {
 
 const i64 ESC_TIMEOUT_MS = 50;
 const i64 IDLE_SLEEP_MS = 5;
+// Focus cell: the single hardware cursor is process-global by nature, so the
+// protocol lives here instead of the App trait (a trait hook would break
+// every existing App impl). The loop clears each frame; a focused widget
+// publishes during render; the loop places or hides after flush.
+i64 g_focus_x;
+i64 g_focus_y;
+bool g_focus_set;
+
+void focus_clear() {
+    g_focus_set = false;
+}
+
+void focus_set(i64 x, i64 y) {
+    g_focus_x = x;
+    g_focus_y = y;
+    g_focus_set = true;
+}
+
+/// Take the published cell; drains it so a widget that stops rendering
+// focused cannot leave a stale cursor behind.
+bool focus_take(i64* out_x, i64* out_y) {
+    if (!g_focus_set) {
+        return false;
+    }
+    *out_x = g_focus_x;
+    *out_y = g_focus_y;
+    g_focus_set = false;
+    return true;
+}
+
+enum Viewport {
+    Fullscreen;
+    Inline(u16);
+}
+
+bool viewport_is_inline(Viewport port) {
+    return match port {
+        Inline(h) : true,
+        _ : false,
+    };
+}
+
+u16 viewport_height(Viewport port) {
+    return match port {
+        Inline(h) : h,
+        _ : 0,
+    };
+}
 
 void run_app<A>(&mut A app) {
+    run_app_view(&mut app, Viewport.Fullscreen);
+}
+
+void run_app_view<A>(&mut A app, Viewport port) {
     if (!term_is_tty(0)) {
         STDOUT.write_str("run_app needs a terminal on stdin\n");
         STDOUT.flush();
@@ -50,9 +102,18 @@ void run_app<A>(&mut A app) {
     }
 
     Terminal t = Terminal.full_screen(&STDOUT);
+    bool inline_mode = viewport_is_inline(port);
+    u16 inline_height = viewport_height(port);
+    if (inline_mode) {
+        t = Terminal.inline(&STDOUT, inline_height);
+    }
     t.hide_cursor();
-    term_enter_alt(&STDOUT);
-    STDOUT.flush();
+    if (!inline_mode) {
+        term_enter_alt(&STDOUT);
+        STDOUT.flush();
+    } else {
+        t.enter_inline();
+    }
 
     app.init();
     KeyParser keys = KeyParser.new();
@@ -61,19 +122,28 @@ void run_app<A>(&mut A app) {
     Instant last_tick = now();
     bool quit = false;
     bool first = true;
+    bool cursor_shown = false;
     while (!quit) {
         bool activity = first;
         first = false;
 
-        // Resize tracking.
+        // Resize tracking: fullscreen follows both dims, inline only width
+        // (its height is reserved, not terminal-sized).
         Result<TermSize, Error> sz = term_get_size(0);
         if (sz.is_ok()) {
             TermSize s = sz.unwrap();
-            if (s.cols > 0 && s.rows > 0
-                && (s.cols != (i64)t.area.width || s.rows != (i64)t.area.height)) {
-                t.resize(s.cols, s.rows);
-                t.clear();
-                activity = true;
+            if (s.cols > 0 && s.rows > 0) {
+                bool wide = s.cols != (i64)t.area.width;
+                bool tall = !inline_mode && s.rows != (i64)t.area.height;
+                if (wide || tall) {
+                    i64 rows = s.rows;
+                    if (inline_mode) {
+                        rows = (i64)t.area.height;
+                    }
+                    t.resize(s.cols, rows);
+                    t.clear();
+                    activity = true;
+                }
             }
         }
 
@@ -140,15 +210,29 @@ void run_app<A>(&mut A app) {
 
         if (activity && !quit) {
             Frame f = t.frame();
+            focus_clear();
             app.render(&f);
             t.flush();
+            i64 focus_x = 0;
+            i64 focus_y = 0;
+            if (focus_take(&focus_x, &focus_y)) {
+                t.place_cursor(focus_x, focus_y);
+                cursor_shown = true;
+            } else if (cursor_shown) {
+                t.hide_cursor();
+                cursor_shown = false;
+            }
         }
         if (!activity && !quit) {
             sleep_ms(IDLE_SLEEP_MS);
         }
     }
 
-    term_exit_alt(&STDOUT);
+    if (!inline_mode) {
+        term_exit_alt(&STDOUT);
+    } else {
+        t.exit_inline();
+    }
     t.show_cursor();
     STDOUT.flush();
     if (restd) {

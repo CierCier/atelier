@@ -1,11 +1,13 @@
 // Atelier showcase: every component on display, driven by the App runner.
 // Run from a real terminal: `agc run --no-cache examples/demo.ag`
+// (`--inline` runs in a 12-row scrollback region instead of alt-screen).
 // Tabs 1/2/3 (or Left/Right): Widgets, Text, State. j/k + arrows navigate.
 // F5 saves the list snapshot, F8 restores it. q quits.
 // b toggles a one-frame flash for the region changed by an update.
 // Animations poll constantly (100ms ticks); p play/pauses, u steps one frame
 // while paused (or nudges forward while playing), t cycles the theme.
 import atelier;
+import std.args;
 import std.term;
 import std.mem.alloc;
 
@@ -102,6 +104,10 @@ str component_name(i64 index) {
     if (index == 21) { return "StatusBar"; }
     if (index == 22) { return "Clear"; }
     if (index == 23) { return "HRule"; }
+    if (index == 24) { return "Canvas"; }
+    if (index == 25) { return "Checklist"; }
+    if (index == 26) { return "Log"; }
+    if (index == 27) { return "Toasts"; }
     return "Buffer";
 }
 
@@ -131,6 +137,10 @@ Vec<ListItem> showcase_items() {
     v.push(ListItem.new("StatusBar — key hints"));
     v.push(ListItem.new("Clear — popup overlay"));
     v.push(ListItem.new("HRule — divider"));
+    v.push(ListItem.new("Canvas — shapes + markers"));
+    v.push(ListItem.new("Checklist — multi-select"));
+    v.push(ListItem.new("Log — level filter"));
+    v.push(ListItem.new("Toasts — expiring notes"));
     return move v;
 }
 
@@ -540,9 +550,33 @@ void render_preview_sample(
             Paragraph sample = Paragraph.new(move sample_text).style(body).block(Block.new().title("compiler output")).scroll((u16)0, (u16)update_frame(ticks, 200) % 2).update_interval(200);
             sample.render(area, buf);
         } else if (selected == 4) {
+            Vec<Constraint> brows = Vec<Constraint>.new();
+            brows.push(Constraint.Fill((u16)1));
+            brows.push(Constraint.Fill((u16)1));
+            Layout bgrid = Layout.new(Direction.Vertical, move brows);
+            Vec<Rect> bhalves = bgrid.split(*area);
+            Rect* btop_half = bhalves.get_ptr((i64)0);
+            Rect* bbot_half = bhalves.get_ptr((i64)1);
+            Vec<Constraint> bcols = Vec<Constraint>.new();
+            bcols.push(Constraint.Fill((u16)1));
+            bcols.push(Constraint.Fill((u16)1));
+            Layout btop = Layout.new(Direction.Horizontal, move bcols);
+            Vec<Rect> top_cells = btop.split(*btop_half);
+            Vec<Constraint> bcols2 = Vec<Constraint>.new();
+            bcols2.push(Constraint.Fill((u16)1));
+            bcols2.push(Constraint.Fill((u16)1));
+            Layout bbottom = Layout.new(Direction.Horizontal, move bcols2);
+            Vec<Rect> bot_cells = bbottom.split(*bbot_half);
+            Block rounded = Block.new().title(" rounded ").border_type(BorderType.Rounded).border_style(accent);
+            rounded.render(top_cells.get_ptr((i64)0), buf);
+            Block doubled = Block.new().title(" double + shadow ").border_type(BorderType.Double).border_style(accent).shadow(muted);
+            doubled.render(top_cells.get_ptr((i64)1), buf);
+            Block bottomed = Block.new().title(" bottom title ").title_position(TitlePosition.Bottom).border_style(accent);
+            bottomed.render(bot_cells.get_ptr((i64)0), buf);
             Block artifacts = Block.new().title("build artifacts").border_style(accent).padding((u16)1).update_interval(400);
-            artifacts.render(area, buf);
-            Rect inner = artifacts.inner(*area);
+            Rect* art_area = bot_cells.get_ptr((i64)1);
+            artifacts.render(art_area, buf);
+            Rect inner = artifacts.inner(*art_area);
             i64 frame = update_frame(ticks, artifacts.update_interval_ms());
             buf.set_string((i64)inner.x, (i64)inner.y, "agc  0.1.0", body, (i64)inner.width);
             if (inner.height > (u16)1) { buf.set_string((i64)inner.x, (i64)inner.y + 1, "demo  executable", accent, (i64)inner.width); }
@@ -628,7 +662,14 @@ void render_preview_sample(
                 second.push(TableCell.new("ready"));
             }
             table_rows.push(TableRow.new(move second));
-            Table table = Table.new(move table_rows).header_rows((u16)1).selected_style(accent).block(Block.new().title("job queue")).update_interval(250);
+            Vec<TableCell> foot = Vec<TableCell>.new();
+            foot.push(TableCell.new("3 files"));
+            if (ticks % 2 == 0) {
+                foot.push(TableCell.new("1 building"));
+            } else {
+                foot.push(TableCell.new("all clean"));
+            }
+            Table table = Table.new(move table_rows).header_rows((u16)1).selected_style(accent).column_spacing((u16)1).footer(move foot).block(Block.new().title("job queue")).update_interval(250);
             TableState table_state = TableState.new();
             table_state.select(1 + update_frame(ticks, table.update_interval_ms()) % 2);
             table.render(area, buf, &table_state);
@@ -646,11 +687,24 @@ void render_preview_sample(
             Text log_text = Text.from("[00:01] resolving imports\n[00:02] parsing atelier.ag\n[00:03] checking ownership\n[00:04] checking widgets\n[00:05] compiling buffer.ag\n[00:06] compiling table.ag\n[00:07] linking demo\n[00:08] running tests\n[00:09] block_test passed\n[00:10] table_test passed\n[00:11] terminal_test passed\n[00:12] all checks passed\n[00:13] waiting for changes\n[00:14] watching files\n[00:15] ready\n[00:16] watching source files\n[00:17] rebuilding changed module\n[00:18] refreshing diagnostics\n[00:19] no errors found\n[00:20] waiting for changes\n[00:21] watching source files\n[00:22] idle\n[00:23] idle\n[00:24] ready");
             Scrollbar bar = Scrollbar.new().thumb_style(accent).update_interval(120);
             i64 scroll = update_frame(ticks, bar.update_interval_ms()) % 12;
+            Rect log_text_area = log_inner;
+            bool show_hbar = (i64)log_inner.height > 2;
+            if (show_hbar) {
+                log_text_area.height = (u16)((i64)log_text_area.height - 1);
+            }
             Paragraph log = Paragraph.new(move log_text).wrap(false).scroll((u16)0, (u16)scroll).style(muted);
-            log.render(&log_inner, buf);
+            log.render(&log_text_area, buf);
             ScrollbarState bar_state = ScrollbarState.new(24);
             bar_state.set_position(scroll);
             bar.render(scroll_area, buf, &bar_state);
+            // Horizontal twin on its own bottom row of the log panel.
+            if (show_hbar) {
+                Scrollbar hbar = Scrollbar.new().orientation(ScrollbarOrientation.Horizontal).thumb_style(accent).end_symbols("◀", "▶");
+                ScrollbarState hbar_state = ScrollbarState.new(24);
+                hbar_state.set_position(scroll);
+                Rect hbar_area = Rect.new(log_inner.x, (u16)((i64)log_inner.y + (i64)log_inner.height - 1), log_inner.width, (u16)1);
+                hbar.render(&hbar_area, buf, &hbar_state);
+            }
         } else if (selected == 15) {
             Vec<TreeItem> tree_items = Vec<TreeItem>.new();
             tree_items.push(TreeItem.new("src", (u16)0, true));
@@ -673,10 +727,19 @@ void render_preview_sample(
             }
             tree.render(area, buf, &tree_state);
         } else if (selected == 16) {
-            TextInput input = TextInput.new().prompt("search: ").placeholder("type a file name").cursor_style(accent.reversed()).block(Block.new().title("file finder")).update_interval(100);
+            Vec<Constraint> irows = Vec<Constraint>.new();
+            irows.push(Constraint.Fill((u16)1));
+            irows.push(Constraint.Fill((u16)1));
+            Layout ilayout = Layout.new(Direction.Vertical, move irows);
+            Vec<Rect> ihalves = ilayout.split(*area);
+            TextInput input = TextInput.new().prompt("search: ").placeholder("type a file name").cursor_style(accent.reversed()).focused(true).block(Block.new().title("file finder")).update_interval(100);
             TextInputState input_state = TextInputState.from("widgets/table.ag");
             input_state.cursor = update_frame(ticks, input.update_interval_ms()) % (input_state.value.len() + 1);
-            input.render(area, buf, &input_state);
+            input.render(ihalves.get_ptr((i64)0), buf, &input_state);
+            TextInput secret = TextInput.new().prompt("password: ").mask(true).cursor_style(accent.reversed()).block(Block.new().title("sign in")).update_interval(100);
+            TextInputState secret_state = TextInputState.from("s3cr3t");
+            secret_state.cursor = update_frame(ticks, secret.update_interval_ms()) % (secret_state.value.len() + 1);
+            secret.render(ihalves.get_ptr((i64)1), buf, &secret_state);
         } else if (selected == 17) {
             Vec<DiffLine> diff_lines = Vec<DiffLine>.new();
             diff_lines.push(DiffLine.new("@@ fn render_frame", DiffKind.Hunk));
@@ -707,7 +770,7 @@ void render_preview_sample(
             Vec<ChartSeries> lines = Vec<ChartSeries>.new();
             ChartSeries cpu = ChartSeries.styled("cpu", accent);
             ChartSeries mem = ChartSeries.styled("mem", muted);
-            LineChart chart = LineChart.new(move lines).axis_style(muted).block(Block.new().title("load / 60s")).update_interval(150);
+            LineChart chart = LineChart.new(move lines).axis_style(muted).show_legend(true).x_labels("t-47", "now").block(Block.new().title("load / 60s")).update_interval(150);
             i64 frame = update_frame(ticks, chart.update_interval_ms());
             for (i64 i = 0; i < 48; i = i + 1) {
                 cpu.push(pulse_value(frame + i, 0, 100));
@@ -727,6 +790,8 @@ void render_preview_sample(
             Rect inner = shell.inner(*area);
             bar.render(&inner, buf);
         } else if (selected == 22) {
+            Fill tint = Fill.new("·").style(muted);
+            tint.render(area, buf);
             Text behind_text = Text.from("This paragraph sits behind the popup. Clear erases its cells first so the dialog paints on empty space.");
             Paragraph behind = Paragraph.new(move behind_text).wrap(false).style(muted);
             behind.render(area, buf);
@@ -756,6 +821,69 @@ void render_preview_sample(
             mid.render(parts.get_ptr((i64)1), buf);
             HRule plain = HRule.new();
             plain.render(parts.get_ptr((i64)2), buf);
+        } else if (selected == 24) {
+            Canvas canvas = Canvas.new().bounds(0, 96, 0, 100).block(Block.new().title("signal")).update_interval(150);
+            i64 frame = update_frame(ticks, canvas.update_interval_ms());
+            for (i64 i = 0; i < 48; i = i + 1) {
+                canvas.point(i * 2, pulse_value(frame + i, 0, 100), accent);
+            }
+            canvas.line(0, 50, 96, 50, muted);
+            canvas.render(area, buf);
+        } else if (selected == 25) {
+            str names[4] = { "main.ag", "atelier.ag", "demo.ag", "README.md" };
+            Checklist cl = Checklist.new(Vec<CheckItem>.new()).check_style(accent).highlight_style(muted.reversed()).block(Block.new().title("stage files")).update_interval(400);
+            i64 frame = update_frame(ticks, cl.update_interval_ms());
+            for (i64 i = 0; i < 4; i = i + 1) {
+                if (((frame / 8) + i) % 2 == 0) {
+                    cl.items.push(CheckItem.checked(names[i]));
+                } else {
+                    cl.items.push(CheckItem.new(names[i]));
+                }
+            }
+            ListState pick_state = ListState.new();
+            pick_state.select(frame % 4);
+            cl.render(area, buf, &pick_state);
+        } else if (selected == 26) {
+            Log journal = Log.new().block(Block.new().title("service log")).update_interval(200);
+            i64 frame = update_frame(ticks, journal.update_interval_ms());
+            LogLevel floor = LogLevel.Trace;
+            if (frame / 16 % 3 == 1) {
+                floor = LogLevel.Info;
+            } else if (frame / 16 % 3 == 2) {
+                floor = LogLevel.Error;
+            }
+            journal = journal.min_level(floor);
+            for (i64 i = 0; i < 20; i = i + 1) {
+                LogLevel lv = LogLevel.Info;
+                if (i % 5 == 3) {
+                    lv = LogLevel.Warn;
+                } else if (i % 5 == 4) {
+                    lv = LogLevel.Error;
+                } else if (i % 5 == 0) {
+                    lv = LogLevel.Debug;
+                }
+                String entry = @format("worker {} heartbeat #{}", i % 3, frame + i);
+                journal.push(entry.to_str(), lv);
+                entry.drop();
+            }
+            String live = @format("update #{} live", frame);
+            journal.push(live.to_str(), LogLevel.Info);
+            live.drop();
+            LogState log_state = LogState.new();
+            journal.render(area, buf, &log_state);
+        } else if (selected == 27) {
+            Toasts toasts = Toasts.new().block(Block.new().title("notifications"));
+            i64 phase = ticks % 60;
+            if (phase < 20) {
+                toasts.push("compiling workspace", LogLevel.Info, (20 - phase) * 100);
+            }
+            if (phase >= 10 && phase < 30) {
+                toasts.push("tests green", LogLevel.Info, (30 - phase) * 100);
+            }
+            if (phase >= 20 && phase < 40) {
+                toasts.push("cache is stale", LogLevel.Warn, (40 - phase) * 100);
+            }
+            toasts.render(area, buf);
         }
     }
 
@@ -859,6 +987,15 @@ i32 main() {
     app.blink_enabled = false;
     app.blink_pending = false;
     app.blink_mask = (u8)0;
-    run_app(&mut app);
+    // `--inline` runs the same showcase in a scrollback region (agent-CLI
+    // style) instead of the alt screen; 12 rows keeps it compact.
+    String flag = arg(1);
+    bool inline_mode = flag.equals("--inline");
+    flag.drop();
+    if (inline_mode) {
+        run_app_view(&mut app, Viewport.Inline((u16)12));
+    } else {
+        run_app(&mut app);
+    }
     return 0;
 }

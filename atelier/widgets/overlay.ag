@@ -38,9 +38,39 @@ impl Widget for Clear {
     }
 }
 
+// Fill: paint every cell in its area with one repeated symbol. Clear's
+// inverse for tinted backdrops behind popups.
+struct Fill {
+    str symbol;
+    Style style;
+}
+
+impl Fill {
+    Fill new(str symbol) {
+        Fill f;
+        f.symbol = symbol;
+        f.style = Style.new();
+        return f;
+    }
+
+    Fill style(Fill self, Style style) {
+        self.style = style;
+        return self;
+    }
+}
+
+impl Widget for Fill {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        for (i64 y = (i64)area.y; y < (i64)area.y + (i64)area.height; y = y + 1) {
+            for (i64 x = (i64)area.x; x < (i64)area.x + (i64)area.width; x = x + 1) {
+                buf.set_string(x, y, self.symbol, self.style, 1);
+            }
+        }
+    }
+}
+
 /// Center a `width` × `height` rect inside `area`, clamped to fit.
-Rect centered_rect(Rect area, u16 width, u16 height) {
-    i64 w = (i64)width;
+Rect centered_rect(Rect area, u16 width, u16 height) {    i64 w = (i64)width;
     i64 h = (i64)height;
     if (w > (i64)area.width) {
         w = (i64)area.width;

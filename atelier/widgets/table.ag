@@ -85,11 +85,14 @@ impl TableState {
 struct Table {
     Vec<TableRow> rows;
     UpdateInterval cadence;
-    Vec<u16> widths;
+    Vec<Constraint> widths;
+    Vec<TableCell> footer;
     Style style;
     Style header_style;
     Style selected_style;
+    Style footer_style;
     str separator;
+    u16 column_spacing;
     u16 header_rows;
     Block block;
     bool has_block;
@@ -100,19 +103,37 @@ impl Table {
         Table t;
         t.rows = move rows;
         t.cadence = UpdateInterval.new(0);
-        t.widths = Vec<u16>.new();
+        t.widths = Vec<Constraint>.new();
+        t.footer = Vec<TableCell>.new();
         t.style = Style.new();
         t.header_style = Style.new().bold();
         t.selected_style = Style.new().reversed();
+        t.footer_style = Style.new().bold();
         t.separator = "│";
+        t.column_spacing = (u16)0;
         t.header_rows = (u16)0;
         t.block = Block.new();
         t.has_block = false;
         return move t;
     }
 
-    Table widths(Table self, Vec<u16> widths) {
+    Table widths(Table self, Vec<Constraint> widths) {
         self.widths = move widths;
+        return move self;
+    }
+
+    Table footer(Table self, Vec<TableCell> footer) {
+        self.footer = move footer;
+        return move self;
+    }
+
+    Table footer_style(Table self, Style style) {
+        self.footer_style = style;
+        return move self;
+    }
+
+    Table column_spacing(Table self, u16 spacing) {
+        self.column_spacing = spacing;
         return move self;
     }
 
@@ -199,29 +220,51 @@ impl StatefulWidget for Table {
         i64 columns = table_column_count(&self.rows);
         i64 separator_width = text_width(self.separator);
         if (separator_width < 1) { separator_width = 1; }
-        Vec<u16> resolved = table_resolve_widths(&self.rows, &self.widths, columns, (i64)inner.width, separator_width);
+        i64 gap = separator_width + (i64)self.column_spacing;
+        Vec<u16> resolved = table_resolve_widths(&self.rows, &self.widths, columns, (i64)inner.width, gap);
+        // A footer pins to the bottom inner row and never scrolls.
+        i64 body_end = (i64)inner.y + height;
+        if (self.footer.len() > 0 && height > 0) {
+            body_end = body_end - 1;
+        }
         i64 y = (i64)inner.y;
-        for (i64 row_idx = state.offset; row_idx < row_count && y < (i64)inner.y + height; row_idx = row_idx + 1) {
-            TableRow* row = self.rows.get_ptr(row_idx);
-            Style row_style = self.style.patch(row.style);
-            if (row_idx < (i64)self.header_rows) { row_style = row_style.patch(self.header_style); }
-            if (row_idx == state.selected) { row_style = row_style.patch(self.selected_style); }
-            i64 x = (i64)inner.x;
-            for (i64 col = 0; col < columns; col = col + 1) {
-                i64 width = (i64)resolved.get(col);
-                if (width <= 0) { continue; }
-                if (col < row.cells.len()) {
-                    TableCell* cell = row.cells.get_ptr(col);
-                    Style cell_style = row_style.patch(cell.style);
-                    buf.set_string(x, y, cell.text.to_str(), cell_style, width);
-                }
-                x = x + width;
-                if (col + 1 < columns && x < (i64)inner.x + (i64)inner.width) {
-                    buf.set_string(x, y, self.separator, row_style, separator_width);
-                    x = x + separator_width;
-                }
-            }
+        for (i64 row_idx = state.offset; row_idx < row_count && y < body_end; row_idx = row_idx + 1) {
+            table_render_row(buf, self, &resolved, columns, row_idx, state, (i64)inner.x, (i64)inner.width, y, gap, separator_width);
             y = y + 1;
+        }
+        if (self.footer.len() > 0 && height > 0) {
+            i64 fy = (i64)inner.y + height - 1;
+            Style footer_style = self.style.patch(self.footer_style);
+            table_render_cells(buf, &resolved, columns, &self.footer, footer_style, (i64)inner.x, (i64)inner.width, fy, self, gap, separator_width);
+        }
+    }
+}
+
+/// One body row: header/selection styling resolved by index, then cells.
+void table_render_row(&mut Buffer buf, &Table table, &Vec<u16> resolved, i64 columns, i64 row_idx, &TableState state, i64 x0, i64 total, i64 y, i64 gap, i64 separator_width) {
+    TableRow* row = table.rows.get_ptr(row_idx);
+    Style row_style = table.style.patch(row.style);
+    if (row_idx < (i64)table.header_rows) { row_style = row_style.patch(table.header_style); }
+    if (row_idx == state.selected) { row_style = row_style.patch(table.selected_style); }
+    table_render_cells(buf, resolved, columns, &row.cells, row_style, x0, total, y, table, gap, separator_width);
+}
+
+/// Shared cell loop for body rows and the footer: fixed widths, separators,
+// blank spacing after each separator.
+void table_render_cells(&mut Buffer buf, &Vec<u16> resolved, i64 columns, &Vec<TableCell> cells, Style row_style, i64 x0, i64 total, i64 y, &Table table, i64 gap, i64 separator_width) {
+    i64 x = x0;
+    for (i64 col = 0; col < columns; col = col + 1) {
+        i64 width = (i64)resolved.get(col);
+        if (width <= 0) { continue; }
+        if (col < cells.len()) {
+            TableCell* cell = cells.get_ptr(col);
+            Style cell_style = row_style.patch(cell.style);
+            buf.set_string(x, y, cell.text.to_str(), cell_style, width);
+        }
+        x = x + width;
+        if (col + 1 < columns && x < x0 + total) {
+            buf.set_string(x, y, table.separator, row_style, separator_width);
+            x = x + gap;
         }
     }
 }
@@ -235,7 +278,7 @@ i64 table_column_count(&Vec<TableRow> rows) {
     return count;
 }
 
-Vec<u16> table_resolve_widths(&Vec<TableRow> rows, &Vec<u16> requested, i64 columns, i64 available, i64 separator_width) {
+Vec<u16> table_resolve_widths(&Vec<TableRow> rows, &Vec<Constraint> requested, i64 columns, i64 available, i64 separator_width) {
     Vec<u16> out = Vec<u16>.new();
     i64 separators = 0;
     if (columns > 1) { separators = (columns - 1) * separator_width; }
@@ -244,10 +287,20 @@ Vec<u16> table_resolve_widths(&Vec<TableRow> rows, &Vec<u16> requested, i64 colu
     i64 auto_count = 0;
     i64 used = 0;
     for (i64 col = 0; col < columns; col = col + 1) {
-        u16 requested_width = 0;
-        if (col < requested.len()) { requested_width = requested.get(col); }
-        i64 width = (i64)requested_width;
-        if (width <= 0) {
+        i64 width = -1;
+        if (col < requested.len()) {
+            &Constraint c = requested.get_ref(col);
+            i64 fixed = constraint_fixed(c);
+            if (fixed >= 0) {
+                width = fixed;
+            } else {
+                i64 pct = constraint_percent(c);
+                if (pct >= 0) {
+                    width = content * pct / 100;
+                }
+            }
+        }
+        if (width < 0) {
             auto_count = auto_count + 1;
             width = table_column_content_width(rows, col);
         }
@@ -265,13 +318,22 @@ Vec<u16> table_resolve_widths(&Vec<TableRow> rows, &Vec<u16> requested, i64 colu
         i64 extra = (content - used) / auto_count;
         if (extra > 0) {
             for (i64 col = 0; col < columns; col = col + 1) {
-                if (col >= requested.len() || requested.get(col) == (u16)0) {
+                if (table_column_is_auto(requested, col)) {
                     out.set(col, out.get(col) + (u16)extra);
                 }
             }
         }
     }
     return move out;
+}
+
+/// Columns without a fixed/percentage constraint share leftover space.
+bool table_column_is_auto(&Vec<Constraint> requested, i64 col) {
+    if (col >= requested.len()) {
+        return true;
+    }
+    &Constraint c = requested.get_ref(col);
+    return constraint_fixed(c) < 0 && constraint_percent(c) < 0;
 }
 
 i64 table_column_content_width(&Vec<TableRow> rows, i64 column) {

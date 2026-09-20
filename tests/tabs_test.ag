@@ -6,8 +6,8 @@ import atelier.text;
 import std.mem.vec;
 import std.test;
 
-i32 main() {
-    test_start("tabs render selected item");
+#[test]
+void tabs_render_selected_item() {
     Vec<TabItem> items = Vec<TabItem>.new();
     items.push(TabItem.new("one"));
     items.push(TabItem.new("two"));
@@ -19,18 +19,33 @@ i32 main() {
     tabs.render(&area, &buf, &state);
     assert_eq_i64(111, (i64)buf.cell_mut(1, 0).ch, "first tab starts at zero");
     assert_eq_i64(116, (i64)buf.cell_mut(8, 0).ch, "second tab is visible");
+}
 
-    test_start("tabs navigation wraps");
+#[test]
+void tabs_navigation_wraps() {
+    Vec<TabItem> items = Vec<TabItem>.new();
+    items.push(TabItem.new("one"));
+    items.push(TabItem.new("two"));
+    Tabs tabs = Tabs.new(move items);
+    TabsState state = TabsState.new();
+    state.select(1);
     state.next(2);
     assert_eq_i64(0, state.selected, "next wraps");
     state.previous(2);
     assert_eq_i64(1, state.selected, "previous wraps");
+}
 
-    test_start("tabs center in tall areas");
+#[test]
+void tabs_center_in_tall_areas() {
+    Vec<TabItem> items = Vec<TabItem>.new();
+    items.push(TabItem.new("one"));
+    items.push(TabItem.new("two"));
+    Tabs tabs = Tabs.new(move items);
+    TabsState state = TabsState.new();
+    state.select(1);
     Rect tall_area = Rect.new((u16)0, (u16)0, (u16)12, (u16)3);
     Buffer tall_buf = Buffer.empty(tall_area);
     tabs.render(&tall_area, &tall_buf, &state);
     assert_eq_i64(0, (i64)tall_buf.cell_mut(1, 0).ch, "top row stays empty");
     assert_eq_i64(111, (i64)tall_buf.cell_mut(1, 1).ch, "tabs sit mid-box");
-    return done();
 }

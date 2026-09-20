@@ -3,8 +3,8 @@ import atelier.buffer;
 import atelier.layout;
 import std.test;
 
-i32 main() {
-    test_start("line chart draws axis and series dots");
+#[test]
+void line_chart_draws_axis_and_series_dots() {
     Vec<ChartSeries> series = Vec<ChartSeries>.new();
     ChartSeries cpu = ChartSeries.new("cpu");
     cpu.push(0);
@@ -21,8 +21,10 @@ i32 main() {
     assert_eq_i64(0x2500, (i64)buf.cell_mut(6, 3).ch, "step runs join points");
     assert_eq_i64(0x2502, (i64)buf.cell_mut(7, 2).ch, "steps rise vertically");
     assert_eq_i64(49, (i64)buf.cell_mut(0, 0).ch, "axis top label starts with '1'");
+}
 
-    test_start("line chart tolerates empty and tiny areas");
+#[test]
+void line_chart_tolerates_empty_and_tiny_areas() {
     Vec<ChartSeries> empty = Vec<ChartSeries>.new();
     LineChart blank = LineChart.new(move empty);
     Rect tiny = Rect.new((u16)0, (u16)0, (u16)3, (u16)1);
@@ -38,5 +40,63 @@ i32 main() {
     Buffer flat_buf = Buffer.empty(flat_area);
     flat_chart.render(&flat_area, &flat_buf);
     assert_eq_i64(0x2022, (i64)flat_buf.cell_mut(7, 2).ch, "flat auto-bounds land on bottom row");
-    return done();
+}
+
+#[test]
+void line_chart_legend_lists_series_and_shifts_plot() {
+    Vec<ChartSeries> series = Vec<ChartSeries>.new();
+    ChartSeries a = ChartSeries.new("a");
+    a.push(0);
+    a.push(100);
+    series.push(move a);
+    ChartSeries b = ChartSeries.new("b");
+    b.push(100);
+    b.push(0);
+    series.push(move b);
+    LineChart chart = LineChart.new(move series).y_bounds(0, 100).show_legend(true);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)10, (u16)4);
+    Buffer buf = Buffer.empty(area);
+    chart.render(&area, &buf);
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(0, 0).ch, "legend first marker");
+    assert_eq_i64(97, (i64)buf.cell_mut(2, 0).ch, "legend first label");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(4, 0).ch, "legend second marker");
+    assert_eq_i64(98, (i64)buf.cell_mut(6, 0).ch, "legend second label");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(9, 1).ch, "max dot moved one row down");
+    assert_eq_i64(0, (i64)buf.cell_mut(9, 0).ch, "legend row holds no plot dot");
+}
+
+#[test]
+void line_chart_x_axis_labels_and_shifts_plot() {
+    Vec<ChartSeries> series = Vec<ChartSeries>.new();
+    ChartSeries cpu = ChartSeries.new("cpu");
+    cpu.push(0);
+    cpu.push(50);
+    cpu.push(100);
+    series.push(move cpu);
+    LineChart chart = LineChart.new(move series).y_bounds(0, 100).x_labels("Jan", "Dec");
+    Rect area = Rect.new((u16)0, (u16)0, (u16)10, (u16)4);
+    Buffer buf = Buffer.empty(area);
+    chart.render(&area, &buf);
+    assert_eq_i64(74, (i64)buf.cell_mut(0, 3).ch, "x-axis first label left");
+    assert_eq_i64(68, (i64)buf.cell_mut(7, 3).ch, "x-axis last label right");
+    assert_eq_i64(99, (i64)buf.cell_mut(9, 3).ch, "x-axis last label end");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(5, 2).ch, "min dot moved one row up");
+    assert_eq_i64(0, (i64)buf.cell_mut(5, 3).ch, "axis row holds no plot dot");
+}
+
+#[test]
+void line_chart_off_by_default() {
+    Vec<ChartSeries> series = Vec<ChartSeries>.new();
+    ChartSeries cpu = ChartSeries.new("cpu");
+    cpu.push(0);
+    cpu.push(50);
+    cpu.push(100);
+    series.push(move cpu);
+    LineChart chart = LineChart.new(move series).y_bounds(0, 100);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)10, (u16)4);
+    Buffer buf = Buffer.empty(area);
+    chart.render(&area, &buf);
+    assert_eq_i64(48, (i64)buf.cell_mut(0, 3).ch, "bottom row keeps tick label");
+    assert_eq_i64(0x2502, (i64)buf.cell_mut(4, 3).ch, "axis column spans bottom row");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(5, 3).ch, "plot uses bottom row");
 }

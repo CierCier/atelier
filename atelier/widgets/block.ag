@@ -17,6 +17,17 @@ const u8 BORDER_LEFT = 4;
 const u8 BORDER_RIGHT = 8;
 const u8 BORDER_ALL = 15;
 
+enum BorderType {
+    Plain;
+    Rounded;
+    Double;
+}
+
+enum TitlePosition {
+    Top;
+    Bottom;
+}
+
 struct Block {
     u8 borders;
     UpdateInterval cadence;
@@ -26,6 +37,10 @@ struct Block {
     str title;
     Style title_style;
     Alignment title_align;
+    BorderType border_type;
+    TitlePosition title_position;
+    Style shadow_style;
+    bool has_shadow;
 }
 
 impl Block {
@@ -39,6 +54,10 @@ impl Block {
         b.title = (str)0;
         b.title_style = Style.new();
         b.title_align = Alignment.Left;
+        b.border_type = BorderType.Plain;
+        b.title_position = TitlePosition.Top;
+        b.shadow_style = Style.new();
+        b.has_shadow = false;
         return b;
     }
 
@@ -90,7 +109,25 @@ impl Block {
         return self;
     }
 
+    Block border_type(Block self, BorderType t) {
+        self.border_type = t;
+        return self;
+    }
+
+    Block title_position(Block self, TitlePosition p) {
+        self.title_position = p;
+        return self;
+    }
+
+    Block shadow(Block self, Style style) {
+        self.shadow_style = style;
+        self.has_shadow = true;
+        return self;
+    }
+
     /// Content area inside the borders.
+    // Titles and shadows draw on border/outside cells, never inside them,
+    // so title_position and shadow leave inner() unchanged.
     Rect inner(&self, Rect area) {
         i64 x = (i64)area.x;
         i64 y = (i64)area.y;
@@ -122,24 +159,44 @@ impl Block {
         i64 x1 = x0 + (i64)area.width - 1;
         i64 y1 = y0 + (i64)area.height - 1;
         Style st = self.border_style;
+        // Rounded keeps single edges (only corners differ); double thickens both.
+        str h_edge = "─";
+        str v_edge = "│";
+        str tl_c = "┌";
+        str tr_c = "┐";
+        str bl_c = "└";
+        str br_c = "┘";
+        if (self.border_type == BorderType.Double) {
+            h_edge = "═";
+            v_edge = "║";
+            tl_c = "╔";
+            tr_c = "╗";
+            bl_c = "╚";
+            br_c = "╝";
+        } else if (self.border_type == BorderType.Rounded) {
+            tl_c = "╭";
+            tr_c = "╮";
+            bl_c = "╰";
+            br_c = "╯";
+        }
         if ((self.borders & BORDER_TOP) != (u8)0) {
             for (i64 x = x0; x <= x1; x = x + 1) {
-                buf.set_string(x, y0, "─", st, 1);
+                buf.set_string(x, y0, h_edge, st, 1);
             }
         }
         if ((self.borders & BORDER_BOTTOM) != (u8)0) {
             for (i64 x = x0; x <= x1; x = x + 1) {
-                buf.set_string(x, y1, "─", st, 1);
+                buf.set_string(x, y1, h_edge, st, 1);
             }
         }
         if ((self.borders & BORDER_LEFT) != (u8)0) {
             for (i64 y = y0; y <= y1; y = y + 1) {
-                buf.set_string(x0, y, "│", st, 1);
+                buf.set_string(x0, y, v_edge, st, 1);
             }
         }
         if ((self.borders & BORDER_RIGHT) != (u8)0) {
             for (i64 y = y0; y <= y1; y = y + 1) {
-                buf.set_string(x1, y, "│", st, 1);
+                buf.set_string(x1, y, v_edge, st, 1);
             }
         }
         // Corners win over edges.
@@ -147,18 +204,50 @@ impl Block {
         bool tr = (self.borders & (BORDER_TOP | BORDER_RIGHT)) == (BORDER_TOP | BORDER_RIGHT);
         bool bl = (self.borders & (BORDER_BOTTOM | BORDER_LEFT)) == (BORDER_BOTTOM | BORDER_LEFT);
         bool br = (self.borders & (BORDER_BOTTOM | BORDER_RIGHT)) == (BORDER_BOTTOM | BORDER_RIGHT);
-        if (tl) { buf.set_string(x0, y0, "┌", st, 1); }
-        if (tr) { buf.set_string(x1, y0, "┐", st, 1); }
-        if (bl) { buf.set_string(x0, y1, "└", st, 1); }
-        if (br) { buf.set_string(x1, y1, "┘", st, 1); }
+        if (tl) { buf.set_string(x0, y0, tl_c, st, 1); }
+        if (tr) { buf.set_string(x1, y0, tr_c, st, 1); }
+        if (bl) { buf.set_string(x0, y1, bl_c, st, 1); }
+        if (br) { buf.set_string(x1, y1, br_c, st, 1); }
+    }
+
+    void render_shadow(&self, &mut Buffer buf, Rect area) {
+        if (!self.has_shadow) {
+            return;
+        }
+        i64 x0 = (i64)area.x;
+        i64 y0 = (i64)area.y;
+        i64 x1 = x0 + (i64)area.width - 1;
+        i64 y1 = y0 + (i64)area.height - 1;
+        // Offset L hugs the bottom-right without touching border cells;
+        // cell_mut null checks clip at buffer bounds.
+        for (i64 y = y0 + 1; y <= y1 + 1; y = y + 1) {
+            Cell* c = buf.cell_mut(x1 + 1, y);
+            if (c != (Cell*)0) {
+                cell_apply(c, self.shadow_style);
+            }
+        }
+        for (i64 x = x0 + 1; x <= x1 + 1; x = x + 1) {
+            Cell* c = buf.cell_mut(x, y1 + 1);
+            if (c != (Cell*)0) {
+                cell_apply(c, self.shadow_style);
+            }
+        }
     }
 
     void render_title(&self, &mut Buffer buf, Rect area) {
         if (self.title == (str)0) {
             return;
         }
-        if ((self.borders & BORDER_TOP) == (u8)0) {
-            return;
+        i64 row = (i64)area.y;
+        if (self.title_position == TitlePosition.Bottom) {
+            if ((self.borders & BORDER_BOTTOM) == (u8)0) {
+                return;
+            }
+            row = (i64)area.y + (i64)area.height - 1;
+        } else {
+            if ((self.borders & BORDER_TOP) == (u8)0) {
+                return;
+            }
         }
         u8* p = (u8*)self.title;
         i64 len = cstr_len(p);
@@ -182,7 +271,7 @@ impl Block {
         } else if (align_is_right(al)) {
             x = (i64)area.x + 1 + max - w;
         }
-        buf.set_string(x, (i64)area.y, self.title, self.title_style, max);
+        buf.set_string(x, row, self.title, self.title_style, max);
     }
 }
 
@@ -205,5 +294,6 @@ impl Widget for Block {
         buf.set_style(*area, self.style);
         self.render_border(buf, *area);
         self.render_title(buf, *area);
+        self.render_shadow(buf, *area);
     }
 }

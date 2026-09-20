@@ -1,10 +1,12 @@
 import atelier.widgets.input;
+import atelier.app;
 import atelier.buffer;
 import atelier.layout;
+import atelier.style;
 import std.test;
 
-i32 main() {
-    test_start("text input editing state");
+#[test]
+void text_input_editing_state() {
     TextInputState state = TextInputState.from("ab");
     state.move_left();
     state.insert("X");
@@ -14,8 +16,10 @@ i32 main() {
     state.home();
     state.delete_forward();
     assert_true(state.value.equals("b"), "forward delete");
+}
 
-    test_start("text input renders prompt and cursor");
+#[test]
+void text_input_renders_prompt_and_cursor() {
     TextInput input = TextInput.new().prompt("$ ");
     TextInputState rendered_state = TextInputState.from("ok");
     Rect area = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
@@ -23,5 +27,71 @@ i32 main() {
     input.render(&area, &buf, &rendered_state);
     assert_eq_i64(36, (i64)buf.cell_mut(0, 0).ch, "prompt first character");
     assert_eq_i64(111, (i64)buf.cell_mut(2, 0).ch, "value follows prompt");
-    return done();
+}
+
+#[test]
+void text_input_masked_hides_value() {
+    TextInput input = TextInput.new().prompt("$ ").mask(true);
+    TextInputState state = TextInputState.from("päss");
+    Rect area = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    input.render(&area, &buf, &state);
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(2, 0).ch, "first bullet");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(3, 0).ch, "second bullet");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(4, 0).ch, "third bullet");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(5, 0).ch, "fourth bullet matches codepoint count");
+    assert_true((i64)buf.cell_mut(2, 0).ch != 112, "no plaintext p visible");
+    assert_true((i64)buf.cell_mut(4, 0).ch != 115, "no plaintext s visible");
+    assert_eq_i64(32, (i64)buf.cell_mut(6, 0).ch, "cursor parks past masked value");
+    i64 cx = -1;
+    i64 cy = -1;
+    input.cursor_pos(&area, &state, &cx, &cy);
+    assert_eq_i64(6, cx, "masked cursor x past bullets");
+    assert_eq_i64(0, cy, "masked cursor y");
+}
+
+#[test]
+void text_input_cursor_pos_matches_render() {
+    TextInput input = TextInput.new().prompt("$ ");
+    TextInputState state = TextInputState.from("ok");
+    Rect area = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    input.render(&area, &buf, &state);
+    i64 cx = -1;
+    i64 cy = -1;
+    input.cursor_pos(&area, &state, &cx, &cy);
+    assert_eq_i64(4, cx, "cursor x at end");
+    assert_eq_i64(0, cy, "cursor y");
+    assert_true((buf.cell_mut(4, 0).mods & MOD_REVERSED) != (u16)0, "end cursor cell styled");
+    state.move_left();
+    input.render(&area, &buf, &state);
+    i64 mx = -1;
+    i64 my = -1;
+    input.cursor_pos(&area, &state, &mx, &my);
+    assert_eq_i64(3, mx, "cursor x mid-string");
+    assert_eq_i64(0, my, "cursor y mid-string");
+    assert_true((buf.cell_mut(3, 0).mods & MOD_REVERSED) != (u16)0, "mid cursor cell styled");
+}
+
+#[test]
+void focused_input_publishes_cursor_cell() {
+    focus_clear();
+    TextInput input = TextInput.new().prompt("$ ").focused(true);
+    TextInputState state = TextInputState.from("ok");
+    state.move_left();
+    Rect area = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    input.render(&area, &buf, &state);
+    i64 x = -1;
+    i64 y = -1;
+    assert_true(focus_take(&x, &y), "focused render publishes");
+    i64 ex = -1;
+    i64 ey = -1;
+    input.cursor_pos(&area, &state, &ex, &ey);
+    assert_eq_i64(ex, x, "published x matches readout");
+    assert_eq_i64(ey, y, "published y matches readout");
+    focus_clear();
+    TextInput plain = TextInput.new().prompt("$ ");
+    plain.render(&area, &buf, &state);
+    assert_false(focus_take(&x, &y), "unfocused render publishes nothing");
 }

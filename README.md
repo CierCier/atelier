@@ -19,18 +19,22 @@ atelier/
   update.ag          elapsed-time update intervals
   terminal.ag        double-buffered Terminal + SGR backend over std.term
   widgets/
-    block.ag         borders, titles, padding
+    block.ag         borders, titles, padding, styles, shadows
     paragraph.ag     word wrap, scroll, alignment
     list.ag          selectable items, highlight, scroll window
+    select.ag        multi-select checklist sharing list navigation
+    log.ag           level-tagged scrolling lines with filter
+    toast.ag         expiring notification stack with TTL
     tabs.ag          horizontal tab navigation
     gauge.ag         gauges, line gauges, sparklines, bar charts, spinners
-    chart.ag         multi-series step-line charts with axes
+    chart.ag         multi-series step-line charts, axes, legends
+    canvas.ag        cartesian shapes (points, lines, rects) in dot/half-block
     chrome.ag        status key-hint bars, labeled dividers
-    overlay.ag       region clear + centered popup rects
-    table.ag         columns, headers, selection, scrolling
-    scrollbar.ag     standalone position gutter
+    overlay.ag       region clear/fill + centered popup rects
+    table.ag         columns, headers, footers, selection, scrolling
+    scrollbar.ag     vertical/horizontal position gutter with end caps
     tree.ag          expandable flat preorder trees
-    input.ag         single-line editor state and cursor
+    input.ag         single-line editor state, cursor, masked entry
     diff.ag          semantic review/diff lines
     kitt.ag          scanning Text overlay with cadence
 tests/               `agc test` suites (one file per module)
@@ -106,7 +110,15 @@ local checkout for that purpose.
 - **Fill the box**: backgrounds paint the whole inner area; meters fill
   every row, single-row chrome (spinner, tabs, rules) centers vertically,
   and bars resolve 1/8-cell fractional tips (`▏`–`▉`).
+- **One hardware cursor**: focused inputs publish to a process focus cell
+  (`focus_set`/`focus_take`) that `run_app` drains after flush — a trait
+  hook would break every `App` impl for one global cursor.
+- **Two viewports**: fullscreen alt-screen (default) or `set_viewport` +
+  inline scrollback region for agent CLIs; inline addressing stays
+  relative because absolute moves cannot know the region's screen row.
 - **Temporaries cannot be borrowed**: compare enums against bound locals,
   never literals (`Color red = Color.Red; ... != red`).
+- **Name your derefs**: `*vec.get_ptr(i)` inline passes `check` but fails
+  codegen — bind `T* p = vec.get_ptr(i)` first, then deref the name.
 - **`match` is an expression**: all arms must yield one type; solver logic
   dispatches on tag functions with if/else chains instead.

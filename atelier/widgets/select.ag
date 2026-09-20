@@ -1,0 +1,164 @@
+// Checklist: multi-select list for file pickers and bulk actions.
+// Navigation and scroll state reuse ListState (identical behavior);
+// checked flags live on the items and flip via toggle_selected.
+
+import std.mem.vec;
+import std.fmt;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+import atelier.widgets.list;
+
+struct CheckItem {
+    String text;
+    Style style;
+    bool checked;
+}
+
+impl CheckItem {
+    CheckItem new(str text) {
+        CheckItem i;
+        i.text = String.from_str(text);
+        i.style = Style.new();
+        i.checked = false;
+        return move i;
+    }
+
+    CheckItem checked(str text) {
+        CheckItem i = CheckItem.new(text);
+        i.checked = true;
+        return move i;
+    }
+}
+
+struct Checklist {
+    Vec<CheckItem> items;
+    UpdateInterval cadence;
+    Style style;
+    Style highlight_style;
+    Style check_style;
+    Block block;
+    bool has_block;
+}
+
+impl Checklist {
+    Checklist new(Vec<CheckItem> items) {
+        Checklist l;
+        l.items = move items;
+        l.cadence = UpdateInterval.new(0);
+        l.style = Style.new();
+        l.highlight_style = Style.new().reversed();
+        l.check_style = Style.new().fg(Color.Green).bold();
+        l.block = Block.new();
+        l.has_block = false;
+        return move l;
+    }
+
+    Checklist block(Checklist self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return move self;
+    }
+
+    Checklist style(Checklist self, Style style) {
+        self.style = style;
+        return move self;
+    }
+
+    Checklist highlight_style(Checklist self, Style style) {
+        self.highlight_style = style;
+        return move self;
+    }
+
+    Checklist check_style(Checklist self, Style style) {
+        self.check_style = style;
+        return move self;
+    }
+
+    Checklist update_interval(Checklist self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return move self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+
+    i64 len(&self) {
+        return self.items.len();
+    }
+
+    i64 checked_count(&self) {
+        i64 n = 0;
+        for (i64 i = 0; i < self.items.len(); i = i + 1) {
+            CheckItem* item = self.items.get_ptr(i);
+            if (item.checked) {
+                n = n + 1;
+            }
+        }
+        return n;
+    }
+
+    void toggle_selected(&mut self, &mut ListState state) {
+        if (state.selected >= 0 && state.selected < self.items.len()) {
+            CheckItem* item = self.items.get_ptr(state.selected);
+            item.checked = !item.checked;
+        }
+    }
+}
+
+impl StatefulWidget for Checklist {
+    type State = ListState;
+
+    void render(&self, &Rect area, &mut Buffer buf, &mut ListState state) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        i64 h = (i64)inner.height;
+        if (h <= 0) {
+            return;
+        }
+        i64 n = self.items.len();
+        list_scroll_window(n, h, state);
+        i64 sel = state.selected;
+        for (i64 row = 0; row < h; row = row + 1) {
+            i64 idx = state.offset + row;
+            if (idx >= n) {
+                break;
+            }
+            CheckItem* item = self.items.get_ptr(idx);
+            Style st = self.style.patch(item.style);
+            if (idx == sel) {
+                st = st.patch(self.highlight_style);
+            }
+            i64 x = (i64)inner.x;
+            i64 y = (i64)inner.y + row;
+            str box = "[ ] ";
+            if (item.checked) {
+                box = "[x] ";
+            }
+            Style box_style = st.patch(self.check_style);
+            i64 max = (i64)inner.x + (i64)inner.width - x;
+            if (max < 0) {
+                max = 0;
+            }
+            x = buf.set_string(x, y, box, box_style, max);
+            max = (i64)inner.x + (i64)inner.width - x;
+            if (max < 0) {
+                max = 0;
+            }
+            buf.set_string(x, y, item.text.to_str(), st, max);
+        }
+    }
+}

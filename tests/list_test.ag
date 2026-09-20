@@ -15,54 +15,54 @@ Vec<ListItem> three_items() {
     return move v;
 }
 
-i32 main() {
-    test_start("render and highlight");
-    {
-        Rect a = Rect.new((u16)0, (u16)0, (u16)8, (u16)4);
-        Buffer b = Buffer.empty(a);
-        List l = List.new(three_items()).highlight_symbol("> ");
-        ListState st = ListState.new();
-        st.select(1);
-        l.render(&a, &b, &st);
-        Cell* h0 = b.cell_mut(0, 0);
-        assert_eq_i64(97, (i64)h0.ch, "first row unselected text");
-        Cell* sym = b.cell_mut(0, 1);
-        assert_eq_i64(62, (i64)sym.ch, "highlight symbol on selected");
-        Cell* txt = b.cell_mut(2, 1);
-        assert_eq_i64(98, (i64)txt.ch, "selected text after symbol");
-    }
-    test_start("scroll follows selection");
-    {
-        Rect a = Rect.new((u16)0, (u16)0, (u16)8, (u16)2);
-        Buffer b = Buffer.empty(a);
-        List l = List.new(three_items());
-        ListState st = ListState.new();
-        st.select(2);
-        l.render(&a, &b, &st);
-        assert_eq_i64(1, st.offset, "offset scrolled to show last");
-        Cell* top = b.cell_mut(0, 0);
-        assert_eq_i64(98, (i64)top.ch, "second item now on top");
-    }
-    test_start("empty and none selection");
-    {
-        Rect a = Rect.new((u16)0, (u16)0, (u16)8, (u16)2);
-        Buffer b = Buffer.empty(a);
-        Vec<ListItem> empty = Vec<ListItem>.new();
-        List l = List.new(move empty);
-        ListState st = ListState.new();
-        l.render(&a, &b, &st);
-        assert_eq_i64(-1, st.selected, "stays unselected");
-    }
-    test_start("hydrated offset is normalized");
-    {
-        Rect a = Rect.new((u16)0, (u16)0, (u16)8, (u16)2);
-        Buffer b = Buffer.empty(a);
-        List l = List.new(three_items());
-        ListState st = ListState.new();
-        st.selected = -1;
-        st.offset = 99;
-        l.render(&a, &b, &st);
-        assert_eq_i64(1, st.offset, "offset clamps to the last page");
-    }
-    return done();
+#[test]
+void render_and_highlight() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)8, (u16)4);
+    Buffer b = Buffer.empty(a);
+    List l = List.new(three_items()).highlight_symbol("> ");
+    ListState st = ListState.new();
+    st.select(1);
+    l.render(&a, &b, &st);
+    Cell* h0 = b.cell_mut(0, 0);
+    assert_eq_i64(97, (i64)h0.ch, "first row unselected text");
+    Cell* sym = b.cell_mut(0, 1);
+    assert_eq_i64(62, (i64)sym.ch, "highlight symbol on selected");
+    Cell* txt = b.cell_mut(2, 1);
+    assert_eq_i64(98, (i64)txt.ch, "selected text after symbol");
+}
+
+#[test]
+void scroll_follows_selection() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)8, (u16)2);
+    Buffer b = Buffer.empty(a);
+    List l = List.new(three_items());
+    ListState st = ListState.new();
+    st.select(2);
+    l.render(&a, &b, &st);
+    assert_eq_i64(1, st.offset, "offset scrolled to show last");
+    Cell* top = b.cell_mut(0, 0);
+    assert_eq_i64(98, (i64)top.ch, "second item now on top");
+}
+
+#[test]
+void empty_and_none_selection() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)8, (u16)2);
+    Buffer b = Buffer.empty(a);
+    Vec<ListItem> empty = Vec<ListItem>.new();
+    List l = List.new(move empty);
+    ListState st = ListState.new();
+    l.render(&a, &b, &st);
+    assert_eq_i64(-1, st.selected, "stays unselected");
+}
+
+#[test]
+void hydrated_offset_is_normalized() {
+    Rect a = Rect.new((u16)0, (u16)0, (u16)8, (u16)2);
+    Buffer b = Buffer.empty(a);
+    List l = List.new(three_items());
+    ListState st = ListState.new();
+    st.selected = -1;
+    st.offset = 99;
+    l.render(&a, &b, &st);
+    assert_eq_i64(1, st.offset, "offset clamps to the last page");
 }

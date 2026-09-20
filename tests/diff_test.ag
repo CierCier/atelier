@@ -4,8 +4,8 @@ import atelier.layout;
 import std.mem.vec;
 import std.test;
 
-i32 main() {
-    test_start("diff prefixes semantic lines");
+#[test]
+void diff_prefixes_semantic_lines() {
     Vec<DiffLine> lines = Vec<DiffLine>.new();
     lines.push(DiffLine.new("old", DiffKind.Removed));
     lines.push(DiffLine.new("new", DiffKind.Added));
@@ -15,5 +15,4 @@ i32 main() {
     view.render(&area, &buf);
     assert_eq_i64(45, (i64)buf.cell_mut(0, 0).ch, "removed prefix");
     assert_eq_i64(43, (i64)buf.cell_mut(0, 1).ch, "added prefix");
-    return done();
 }

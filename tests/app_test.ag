@@ -1,0 +1,18 @@
+import atelier.app;
+import std.test;
+
+#[test]
+void focus_cell_clears_and_takes() {
+    focus_clear();
+    i64 x = -1;
+    i64 y = -1;
+    assert_false(focus_take(&x, &y), "empty cell takes nothing");
+    focus_set(7, 3);
+    assert_true(focus_take(&x, &y), "set cell takes");
+    assert_eq_i64(7, x, "taken x matches");
+    assert_eq_i64(3, y, "taken y matches");
+    assert_false(focus_take(&x, &y), "take drains the cell");
+    focus_set(1, 1);
+    focus_clear();
+    assert_false(focus_take(&x, &y), "clear drains the cell");
+}

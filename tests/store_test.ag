@@ -4,32 +4,30 @@ import std.json;
 import std.test;
 import std.mem.alloc;
 
-i32 main() {
-    test_start("list state json round-trip");
-    {
-        ListState s = ListState.new();
-        s.select(3);
-        s.offset = 1;
-        str snap = @json(s);
-        assert_eq_str("{\"selected\":3,\"offset\":1}", snap, "snapshot shape");
-        Result<ListState, JsonError> r = @from_json(ListState, snap);
-        assert_true(r.is_ok(), "restore parses");
-        ListState back = r.unwrap();
-        assert_eq_i64(3, back.selected, "selected restored");
-        assert_eq_i64(1, back.offset, "offset restored");
-        free((void*)snap);
-    }
-    test_start("file save and load");
-    {
-        bool ok = store_save("/tmp/opencode/atelier_store_test.json", "{\"a\":1}");
-        assert_true(ok, "save works");
-        Result<String, Error> r = store_load("/tmp/opencode/atelier_store_test.json");
-        assert_true(r.is_ok(), "load works");
-        String content = r.unwrap();
-        assert_true(content.equals("{\"a\":1}"), "content round-trips");
-        Result<String, Error> missing = store_load("/tmp/opencode/atelier_nope.json");
-        assert_true(missing.is_err(), "missing file errors");
-        assert_true(!store_save("/tmp/opencode/", "{\"a\":1}"), "dir path fails");
-    }
-    return done();
+#[test]
+void list_state_json_round_trip() {
+    ListState s = ListState.new();
+    s.select(3);
+    s.offset = 1;
+    str snap = @json(s);
+    assert_eq_str("{\"selected\":3,\"offset\":1}", snap, "snapshot shape");
+    Result<ListState, JsonError> r = @from_json(ListState, snap);
+    assert_true(r.is_ok(), "restore parses");
+    ListState back = r.unwrap();
+    assert_eq_i64(3, back.selected, "selected restored");
+    assert_eq_i64(1, back.offset, "offset restored");
+    free((void*)snap);
+}
+
+#[test]
+void file_save_and_load() {
+    bool ok = store_save("/tmp/opencode/atelier_store_test.json", "{\"a\":1}");
+    assert_true(ok, "save works");
+    Result<String, Error> r = store_load("/tmp/opencode/atelier_store_test.json");
+    assert_true(r.is_ok(), "load works");
+    String content = r.unwrap();
+    assert_true(content.equals("{\"a\":1}"), "content round-trips");
+    Result<String, Error> missing = store_load("/tmp/opencode/atelier_nope.json");
+    assert_true(missing.is_err(), "missing file errors");
+    assert_true(!store_save("/tmp/opencode/", "{\"a\":1}"), "dir path fails");
 }

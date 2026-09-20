@@ -1,0 +1,273 @@
+// Canvas: arbitrary shapes on a Cartesian grid without closures.
+//
+// Shapes are data (an enum the application pushes), so there is nothing to
+// capture and no renderer registry: render maps each shape to cells and
+// stamps it. Dot plots one cell per point; HalfBlock accumulates two
+// half-rows per cell (▀/▄/█) for twice the vertical resolution.
+
+import std.mem.vec;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+
+enum CanvasMarker {
+    Dot;
+    HalfBlock;
+}
+
+enum CanvasShape {
+    Point(i64, i64, Style);
+    Line(i64, i64, i64, i64, Style);
+    Rect(i64, i64, i64, i64, Style);
+}
+
+struct Canvas {
+    Vec<CanvasShape> shapes;
+    CanvasMarker marker;
+    UpdateInterval cadence;
+    i64 x_min;
+    i64 x_max;
+    i64 y_min;
+    i64 y_max;
+    Style style;
+    Block block;
+    bool has_block;
+}
+
+impl Canvas {
+    Canvas new() {
+        Canvas c;
+        c.shapes = Vec<CanvasShape>.new();
+        c.marker = CanvasMarker.HalfBlock;
+        c.cadence = UpdateInterval.new(0);
+        c.x_min = 0;
+        c.x_max = 100;
+        c.y_min = 0;
+        c.y_max = 100;
+        c.style = Style.new();
+        c.block = Block.new();
+        c.has_block = false;
+        return move c;
+    }
+
+    Canvas marker(Canvas self, CanvasMarker marker) {
+        self.marker = marker;
+        return move self;
+    }
+
+    Canvas bounds(Canvas self, i64 x_min, i64 x_max, i64 y_min, i64 y_max) {
+        self.x_min = x_min;
+        self.x_max = x_max;
+        self.y_min = y_min;
+        self.y_max = y_max;
+        return move self;
+    }
+
+    Canvas style(Canvas self, Style style) {
+        self.style = style;
+        return move self;
+    }
+
+    Canvas block(Canvas self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return move self;
+    }
+
+    Canvas update_interval(Canvas self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return move self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+
+    void point(&mut self, i64 x, i64 y, Style style) {
+        self.shapes.push(CanvasShape.Point(x, y, style));
+    }
+
+    void line(&mut self, i64 x0, i64 y0, i64 x1, i64 y1, Style style) {
+        self.shapes.push(CanvasShape.Line(x0, y0, x1, y1, style));
+    }
+
+    void rect(&mut self, i64 x, i64 y, i64 w, i64 h, Style style) {
+        self.shapes.push(CanvasShape.Rect(x, y, w, h, style));
+    }
+
+    i64 len(&self) {
+        return self.shapes.len();
+    }
+}
+
+impl Widget for Canvas {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+        if (self.x_max <= self.x_min || self.y_max <= self.y_min) {
+            return;
+        }
+        i64 w = (i64)inner.width;
+        i64 h = (i64)inner.height;
+        bool half = false;
+        CanvasMarker marker = self.marker;
+        match marker {
+            HalfBlock : { half = true; },
+            _ : { half = false; },
+        }
+        // HalfBlock accumulates here; Dot stamps straight into the buffer.
+        Vec<u8> mask = Vec<u8>.new();
+        Vec<Style> cells = Vec<Style>.new();
+        if (half) {
+            for (i64 i = 0; i < w * h; i = i + 1) {
+                mask.push((u8)0);
+                cells.push(Style.new());
+            }
+        }
+        for (i64 s = 0; s < self.shapes.len(); s = s + 1) {
+            CanvasShape* shape = self.shapes.get_ptr(s);
+            match *shape {
+                Point(x, y, st) : {
+                    canvas_paint_point(self, buf, inner, w, h, half, x, y, st, &mut mask, &mut cells);
+                },
+                Line(x0, y0, x1, y1, st) : {
+                    canvas_paint_line(self, buf, inner, w, h, half, x0, y0, x1, y1, st, &mut mask, &mut cells);
+                },
+                Rect(x, y, rw, rh, st) : {
+                    canvas_paint_line(self, buf, inner, w, h, half, x, y, x + rw, y, st, &mut mask, &mut cells);
+                    canvas_paint_line(self, buf, inner, w, h, half, x + rw, y, x + rw, y + rh, st, &mut mask, &mut cells);
+                    canvas_paint_line(self, buf, inner, w, h, half, x + rw, y + rh, x, y + rh, st, &mut mask, &mut cells);
+                    canvas_paint_line(self, buf, inner, w, h, half, x, y + rh, x, y, st, &mut mask, &mut cells);
+                },
+            }
+        }
+        if (half) {
+            for (i64 row = 0; row < h; row = row + 1) {
+                for (i64 col = 0; col < w; col = col + 1) {
+                    u8 bits = mask.get(row * w + col);
+                    if (bits == (u8)0) {
+                        continue;
+                    }
+                    Style* st = cells.get_ptr(row * w + col);
+                    str glyph = "█";
+                    if (bits == (u8)1) {
+                        glyph = "▀";
+                    } else if (bits == (u8)2) {
+                        glyph = "▄";
+                    }
+                    buf.set_string((i64)inner.x + col, (i64)inner.y + row, glyph, *st, 1);
+                }
+            }
+        }
+    }
+}
+
+/// Data point outside the bounds carries no information; skipping beats
+// clamping it into a misleading edge streak.
+void canvas_paint_point(&Canvas canvas, &mut Buffer buf, Rect inner, i64 w, i64 h, bool half, i64 x, i64 y, Style st, &mut Vec<u8> mask, &mut Vec<Style> cells) {
+    if (x < canvas.x_min || x > canvas.x_max || y < canvas.y_min || y > canvas.y_max) {
+        return;
+    }
+    i64 col = canvas_map_x(canvas, x, w);
+    if (half) {
+        i64 grow = (canvas.y_max - y) * (2 * h - 1) / (canvas.y_max - canvas.y_min);
+        canvas_half_set(col, grow, w, h, st, mask, cells);
+    } else {
+        i64 row = (canvas.y_max - y) * (h - 1) / (canvas.y_max - canvas.y_min);
+        buf.set_string((i64)inner.x + col, (i64)inner.y + row, "•", st, 1);
+    }
+}
+
+/// Cell-space Bresenham over the dot grid (or the doubled half-row grid).
+// A stroke fully outside one side is skipped outright; partial crossings
+// draw to the edge, which reads as natural clipping.
+void canvas_paint_line(&Canvas canvas, &mut Buffer buf, Rect inner, i64 w, i64 h, bool half, i64 x0, i64 y0, i64 x1, i64 y1, Style st, &mut Vec<u8> mask, &mut Vec<Style> cells) {
+    i64 grid_h = h;
+    if (half) {
+        grid_h = 2 * h;
+    }
+    i64 ax = canvas_map_x(canvas, x0, w);
+    i64 ay = canvas_map_y(canvas, y0, grid_h);
+    i64 bx = canvas_map_x(canvas, x1, w);
+    i64 by = canvas_map_y(canvas, y1, grid_h);
+    if (ax < 0 && bx < 0) { return; }
+    if (ax >= w && bx >= w) { return; }
+    if (ay < 0 && by < 0) { return; }
+    if (ay >= grid_h && by >= grid_h) { return; }
+    ax = canvas_clamp(ax, 0, w - 1);
+    ay = canvas_clamp(ay, 0, grid_h - 1);
+    bx = canvas_clamp(bx, 0, w - 1);
+    by = canvas_clamp(by, 0, grid_h - 1);
+    i64 dx = bx - ax;
+    if (dx < 0) { dx = 0 - dx; }
+    i64 sx = 1;
+    if (ax > bx) { sx = -1; }
+    i64 dy = by - ay;
+    if (dy < 0) { dy = 0 - dy; }
+    dy = 0 - dy;
+    i64 sy = 1;
+    if (ay > by) { sy = -1; }
+    i64 err = dx + dy;
+    i64 cx = ax;
+    i64 cy = ay;
+    while (true) {
+        if (half) {
+            canvas_half_set(cx, cy, w, h, st, mask, cells);
+        } else {
+            buf.set_string((i64)inner.x + cx, (i64)inner.y + cy, "•", st, 1);
+        }
+        if (cx == bx && cy == by) { break; }
+        i64 e2 = 2 * err;
+        if (e2 >= dy) {
+            err = err + dy;
+            cx = cx + sx;
+        }
+        if (e2 <= dx) {
+            err = err + dx;
+            cy = cy + sy;
+        }
+    }
+}
+
+i64 canvas_map_x(&Canvas canvas, i64 x, i64 w) {
+    return (x - canvas.x_min) * (w - 1) / (canvas.x_max - canvas.x_min);
+}
+
+i64 canvas_map_y(&Canvas canvas, i64 y, i64 grid_h) {
+    return (canvas.y_max - y) * (grid_h - 1) / (canvas.y_max - canvas.y_min);
+}
+
+i64 canvas_clamp(i64 v, i64 lo, i64 hi) {
+    if (v < lo) { return lo; }
+    if (v > hi) { return hi; }
+    return v;
+}
+
+/// Set one half-row bit; last writer wins the cell style. Guarded so
+// strokes walking off-grid cannot touch neighboring cells.
+void canvas_half_set(i64 col, i64 grow, i64 w, i64 h, Style st, &mut Vec<u8> mask, &mut Vec<Style> cells) {
+    if (col < 0 || col >= w || grow < 0 || grow >= 2 * h) {
+        return;
+    }
+    i64 row = grow / 2;
+    u8 bit = (u8)2;
+    if (grow % 2 == 0) {
+        bit = (u8)1;
+    }
+    mask.set(row * w + col, mask.get(row * w + col) | bit);
+    cells.set(row * w + col, st);
+}

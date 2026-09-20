@@ -117,6 +117,37 @@ impl ListState {
     }
 }
 
+// Clamp selection into range and keep it visible via the offset. Shared
+// with Checklist: identical navigation, different row painting.
+void list_scroll_window(i64 count, i64 height, &mut ListState state) {
+    i64 sel = state.selected;
+    if (sel < -1) {
+        sel = -1;
+    }
+    if (sel >= count) {
+        sel = count - 1;
+    }
+    state.selected = sel;
+    if (sel >= 0) {
+        if (sel < state.offset) {
+            state.offset = sel;
+        }
+        if (sel >= state.offset + height) {
+            state.offset = sel - height + 1;
+        }
+    }
+    if (state.offset < 0) {
+        state.offset = 0;
+    }
+    i64 max_offset = count - height;
+    if (max_offset < 0) {
+        max_offset = 0;
+    }
+    if (state.offset > max_offset) {
+        state.offset = max_offset;
+    }
+}
+
 impl StatefulWidget for List {
     type State = ListState;
 
@@ -132,33 +163,8 @@ impl StatefulWidget for List {
             return;
         }
         i64 n = self.items.len();
-        // Clamp selection into range; keep it visible via the offset.
+        list_scroll_window(n, h, state);
         i64 sel = state.selected;
-        if (sel < -1) {
-            sel = -1;
-        }
-        if (sel >= n) {
-            sel = n - 1;
-        }
-        state.selected = sel;
-        if (sel >= 0) {
-            if (sel < state.offset) {
-                state.offset = sel;
-            }
-            if (sel >= state.offset + h) {
-                state.offset = sel - h + 1;
-            }
-        }
-        if (state.offset < 0) {
-            state.offset = 0;
-        }
-        i64 max_offset = n - h;
-        if (max_offset < 0) {
-            max_offset = 0;
-        }
-        if (state.offset > max_offset) {
-            state.offset = max_offset;
-        }
         i64 sym_w = 0;
         if (self.highlight_symbol != (str)0) {
             sym_w = text_width(self.highlight_symbol);

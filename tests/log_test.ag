@@ -1,0 +1,68 @@
+import atelier.widgets.log;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import std.test;
+
+Log two_lines() {
+    Log log = Log.new();
+    log.push("booted", LogLevel.Info);
+    log.push("disk failing", LogLevel.Error);
+    return move log;
+}
+
+#[test]
+void log_tags_and_levels() {
+    Log log = two_lines();
+    LogState state = LogState.new();
+    Rect area = Rect.new((u16)0, (u16)0, (u16)12, (u16)2);
+    Buffer buf = Buffer.empty(area);
+    log.render(&area, &buf, &state);
+    assert_eq_i64(73, (i64)buf.cell_mut(0, 0).ch, "info tags INF");
+    assert_eq_i64(69, (i64)buf.cell_mut(0, 1).ch, "error tags ERR");
+    assert_eq_i64(98, (i64)buf.cell_mut(4, 0).ch, "text follows tag");
+    Color red = Color.Red;
+    assert_true(buf.cell_mut(0, 1).fg == red, "error row styled red");
+}
+
+#[test]
+void min_level_filters_quiet_lines() {
+    Log log = two_lines();
+    log = log.min_level(LogLevel.Error);
+    LogState state = LogState.new();
+    Rect area = Rect.new((u16)0, (u16)0, (u16)12, (u16)2);
+    Buffer buf = Buffer.empty(area);
+    log.render(&area, &buf, &state);
+    assert_eq_i64(69, (i64)buf.cell_mut(0, 0).ch, "error survives filter");
+    assert_eq_i64(0, (i64)buf.cell_mut(0, 1).ch, "info row filtered away");
+}
+
+#[test]
+void autoscroll_pins_tail_and_limit_trims_head() {
+    Log log = Log.new().limit(3);
+    log.push("one", LogLevel.Info);
+    log.push("two", LogLevel.Info);
+    log.push("three", LogLevel.Info);
+    log.push("four", LogLevel.Info);
+    assert_eq_i64(3, log.len(), "limit drops oldest");
+    LogState state = LogState.new();
+    Rect area = Rect.new((u16)0, (u16)0, (u16)12, (u16)2);
+    Buffer buf = Buffer.empty(area);
+    log.render(&area, &buf, &state);
+    assert_eq_i64(116, (i64)buf.cell_mut(4, 0).ch, "tail starts at three");
+    assert_eq_i64(102, (i64)buf.cell_mut(4, 1).ch, "tail ends at four");
+}
+
+#[test]
+void manual_offset_selects_window() {
+    Log log = Log.new().autoscroll(false);
+    log.push("one", LogLevel.Info);
+    log.push("two", LogLevel.Info);
+    log.push("three", LogLevel.Info);
+    LogState state = LogState.new();
+    state.offset = 1;
+    Rect area = Rect.new((u16)0, (u16)0, (u16)12, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    log.render(&area, &buf, &state);
+    assert_eq_i64(116, (i64)buf.cell_mut(4, 0).ch, "offset skips head");
+}

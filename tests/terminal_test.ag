@@ -4,67 +4,142 @@ import atelier.layout;
 import std.io.file;
 import std.test;
 
-i32 main() {
-    test_start("flush emits only changes");
-    {
-        u8 scratch[4096];
-        BufWriter w;
-        w.data = (i64)&scratch[0];
-        w.len = 0;
-        w.cap = -4096;
-        w.fd = -1;
-        w.list_next = (BufWriter*)0;
-        w.list_prev = (BufWriter*)0;
-        w.mode = IOMODE_MEMORY;
-        Terminal t = Terminal.new(&w, Rect.new((u16)0, (u16)0, (u16)5, (u16)1));
-        Frame f = t.frame();
-        f.buf.set_string(0, 0, "hi", Style.new(), 5);
-        t.flush();
-        i64 first_len = w.len;
-        assert_true(first_len > 2, "first flush emits bytes");
-        w.len = 0;
-        // Full re-render of identical content diffs clean.
-        Frame f1 = t.frame();
-        f1.buf.set_string(0, 0, "hi", Style.new(), 5);
-        t.flush();
-        assert_eq_i64(0, w.len, "no-change flush emits nothing");
-        // A fresh frame starts empty. A shorter render must clear trailing
-        // cells instead of inheriting them from every other frame.
-        Frame f_short = t.frame();
-        f_short.buf.set_string(0, 0, "h", Style.new(), 5);
-        Cell* tail = f_short.buf.cell_mut(1, 0);
-        assert_eq_i64(0, (i64)tail.ch, "short frame clears trailing cells");
-        t.flush();
-        w.len = 0;
-        // One cell changes: output is small and local.
-        Frame f2 = t.frame();
-        f2.buf.set_string(0, 0, "ho", Style.new(), 5);
-        t.flush();
-        assert_true(w.len > 0 && w.len < first_len, "delta smaller than full");
-    }
-    test_start("wide glyph does not emit a trailer cell");
-    {
-        u8 scratch2[4096];
-        BufWriter w2;
-        w2.data = (i64)&scratch2[0];
-        w2.len = 0;
-        w2.cap = -4096;
-        w2.fd = -1;
-        w2.list_next = (BufWriter*)0;
-        w2.list_prev = (BufWriter*)0;
-        w2.mode = IOMODE_MEMORY;
-        Terminal t2 = Terminal.new(&w2, Rect.new((u16)0, (u16)0, (u16)5, (u16)1));
-        Frame wide = t2.frame();
-        wide.buf.set_string(0, 0, "あx", Style.new(), 5);
-        t2.flush();
-        bool adjacent = false;
-        for (i64 i = 0; i + 3 < w2.len; i = i + 1) {
-            if (scratch2[i] == (u8)0xE3 && scratch2[i + 1] == (u8)0x81
-                && scratch2[i + 2] == (u8)0x82 && scratch2[i + 3] == (u8)120) {
-                adjacent = true;
-            }
+#[test]
+void flush_emits_only_changes() {
+    u8 scratch[4096];
+    BufWriter w;
+    w.data = (i64)&scratch[0];
+    w.len = 0;
+    w.cap = -4096;
+    w.fd = -1;
+    w.list_next = (BufWriter*)0;
+    w.list_prev = (BufWriter*)0;
+    w.mode = IOMODE_MEMORY;
+    Terminal t = Terminal.new(&w, Rect.new((u16)0, (u16)0, (u16)5, (u16)1));
+    Frame f = t.frame();
+    f.buf.set_string(0, 0, "hi", Style.new(), 5);
+    t.flush();
+    i64 first_len = w.len;
+    assert_true(first_len > 2, "first flush emits bytes");
+    w.len = 0;
+    // Full re-render of identical content diffs clean.
+    Frame f1 = t.frame();
+    f1.buf.set_string(0, 0, "hi", Style.new(), 5);
+    t.flush();
+    assert_eq_i64(0, w.len, "no-change flush emits nothing");
+    // A fresh frame starts empty. A shorter render must clear trailing
+    // cells instead of inheriting them from every other frame.
+    Frame f_short = t.frame();
+    f_short.buf.set_string(0, 0, "h", Style.new(), 5);
+    Cell* tail = f_short.buf.cell_mut(1, 0);
+    assert_eq_i64(0, (i64)tail.ch, "short frame clears trailing cells");
+    t.flush();
+    w.len = 0;
+    // One cell changes: output is small and local.
+    Frame f2 = t.frame();
+    f2.buf.set_string(0, 0, "ho", Style.new(), 5);
+    t.flush();
+    assert_true(w.len > 0 && w.len < first_len, "delta smaller than full");
+}
+
+#[test]
+void place_cursor_moves_hardware_cursor() {
+    u8 scratch3[64];
+    BufWriter w3;
+    w3.data = (i64)&scratch3[0];
+    w3.len = 0;
+    w3.cap = -64;
+    w3.fd = -1;
+    w3.list_next = (BufWriter*)0;
+    w3.list_prev = (BufWriter*)0;
+    w3.mode = IOMODE_MEMORY;
+    Terminal t3 = Terminal.new(&w3, Rect.new((u16)0, (u16)0, (u16)5, (u16)1));
+    t3.place_cursor(2, 0);
+    // CSI 1 ; 3 H: 1-based row 1, column 3.
+    assert_eq_i64(6, w3.len, "cursor move emits six bytes");
+    assert_eq_i64(0x1B, (i64)scratch3[0], "escape opens the sequence");
+    assert_eq_i64(0x48, (i64)scratch3[5], "H terminates the move");
+    assert_eq_i64(49, (i64)scratch3[2], "row byte is '1'");
+    assert_eq_i64(51, (i64)scratch3[4], "column byte is '3'");
+}
+
+#[test]
+void wide_glyph_skips_trailer_cell() {
+    u8 scratch2[4096];
+    BufWriter w2;
+    w2.data = (i64)&scratch2[0];
+    w2.len = 0;
+    w2.cap = -4096;
+    w2.fd = -1;
+    w2.list_next = (BufWriter*)0;
+    w2.list_prev = (BufWriter*)0;
+    w2.mode = IOMODE_MEMORY;
+    Terminal t2 = Terminal.new(&w2, Rect.new((u16)0, (u16)0, (u16)5, (u16)1));
+    Frame wide = t2.frame();
+    wide.buf.set_string(0, 0, "あx", Style.new(), 5);
+    t2.flush();
+    bool adjacent = false;
+    for (i64 i = 0; i + 3 < w2.len; i = i + 1) {
+        if (scratch2[i] == (u8)0xE3 && scratch2[i + 1] == (u8)0x81
+            && scratch2[i + 2] == (u8)0x82 && scratch2[i + 3] == (u8)120) {
+            adjacent = true;
         }
-        assert_true(adjacent, "wide glyph is followed directly by next cell");
     }
-    return done();
+    assert_true(adjacent, "wide glyph is followed directly by next cell");
+}
+
+#[test]
+void inline_region_reserves_and_addresses_relatively() {
+    u8 scratch[64];
+    BufWriter w;
+    w.data = (i64)&scratch[0];
+    w.len = 0;
+    w.cap = -64;
+    w.fd = -1;
+    w.list_next = (BufWriter*)0;
+    w.list_prev = (BufWriter*)0;
+    w.mode = IOMODE_MEMORY;
+    Terminal t = Terminal.inline(&w, (u16)2);
+    assert_eq_i64(2, (i64)t.area.height, "inline keeps requested height");
+    t.enter_inline();
+    // 2 CRLF pairs reserve the rows, then CSI 2 A climbs back to the top.
+    assert_eq_i64(8, w.len, "reserve plus climb emits eight bytes");
+    assert_eq_i64(13, (i64)scratch[0], "reserve starts with CR");
+    assert_eq_i64(10, (i64)scratch[1], "reserve ends the row with LF");
+    assert_eq_i64(0x41, (i64)scratch[7], "A climbs back up");
+    w.len = 0;
+    Frame f = t.frame();
+    f.buf.set_string(2, 0, "hi", Style.new(), 5);
+    t.flush();
+    assert_true(w.len > 0, "inline flush emits");
+    bool absolute = false;
+    for (i64 i = 0; i < w.len; i = i + 1) {
+        if (scratch[i] == (u8)0x48) {
+            absolute = true;
+        }
+    }
+    assert_false(absolute, "no absolute H move inside the region");
+}
+
+#[test]
+void inline_exit_drops_below_region() {
+    u8 scratch[64];
+    BufWriter w;
+    w.data = (i64)&scratch[0];
+    w.len = 0;
+    w.cap = -64;
+    w.fd = -1;
+    w.list_next = (BufWriter*)0;
+    w.list_prev = (BufWriter*)0;
+    w.mode = IOMODE_MEMORY;
+    Terminal t = Terminal.inline(&w, (u16)3);
+    t.enter_inline();
+    w.len = 0;
+    Frame f = t.frame();
+    f.buf.set_string(0, 0, "hi", Style.new(), 5);
+    t.flush();
+    w.len = 0;
+    t.exit_inline();
+    assert_true(w.len > 0, "exit emits a move");
+    assert_eq_i64(0x42, (i64)scratch[w.len - 1], "B moves down past the region");
 }

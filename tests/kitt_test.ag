@@ -6,8 +6,8 @@ import atelier.style;
 import atelier.text;
 import std.test;
 
-i32 main() {
-    test_start("scanner renders supplied text");
+#[test]
+void scanner_renders_supplied_text() {
     Text text = Text.from("hello");
     KittScanner scanner = KittScanner.new(move text, 50);
     Rect area = Rect.new((u16)0, (u16)0, (u16)5, (u16)1);
@@ -16,15 +16,23 @@ i32 main() {
     assert_eq_i64(104, (i64)buf.cell_mut(0, 0).ch, "text is delegated to paragraph");
     Color red = Color.BrightRed;
     assert_true(buf.cell_mut(0, 0).fg == red, "scanner styles the hot cell");
+}
 
-    test_start("scanner moves at its interval");
+#[test]
+void scanner_moves_at_its_interval() {
+    Text text = Text.from("hello");
+    KittScanner scanner = KittScanner.new(move text, 50);
     assert_eq_i64(1, scanner.advance(50), "one scanner step");
-    buf.reset();
+    Rect area = Rect.new((u16)0, (u16)0, (u16)5, (u16)1);
+    Buffer buf = Buffer.empty(area);
     scanner.render(&area, &buf);
     assert_eq_i64(101, (i64)buf.cell_mut(1, 0).ch, "text remains under the scan");
+    Color red = Color.BrightRed;
     assert_true(buf.cell_mut(1, 0).fg == red, "hot cell moves right");
+}
 
-    test_start("demo configuration across widths and long runs");
+#[test]
+void demo_configuration_across_widths_and_long_runs() {
     i64 widths[6] = { 0, 1, 2, 3, 40, 120 };
     for (i64 w = 0; w < 6; w = w + 1) {
         Rect a = Rect.new((u16)0, (u16)0, (u16)widths[w], (u16)4);
@@ -42,5 +50,4 @@ i32 main() {
         b.reset();
         s.render(&a, &b);
     }
-    return done();
 }

@@ -1,0 +1,74 @@
+import atelier.widgets.canvas;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import std.test;
+
+#[test]
+void dot_points_map_data_to_cells() {
+    Canvas c = Canvas.new().marker(CanvasMarker.Dot).bounds(0, 10, 0, 10);
+    c.point(0, 0, Style.new());
+    c.point(10, 10, Style.new());
+    Rect area = Rect.new((u16)0, (u16)0, (u16)12, (u16)6);
+    Buffer buf = Buffer.empty(area);
+    c.render(&area, &buf);
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(0, 5).ch, "origin lands bottom-left");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(11, 0).ch, "max lands top-right");
+}
+
+#[test]
+void line_stamps_endpoints_and_span() {
+    Canvas c = Canvas.new().marker(CanvasMarker.Dot).bounds(0, 10, 0, 10);
+    c.line(0, 0, 10, 10, Style.new());
+    Rect area = Rect.new((u16)0, (u16)0, (u16)12, (u16)6);
+    Buffer buf = Buffer.empty(area);
+    c.render(&area, &buf);
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(0, 5).ch, "line starts at origin");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(11, 0).ch, "line ends at max");
+    assert_true((i64)buf.cell_mut(5, 2).ch != 0 || (i64)buf.cell_mut(6, 2).ch != 0, "diagonal crosses the middle");
+}
+
+#[test]
+void rect_draws_four_corners() {
+    Canvas c = Canvas.new().marker(CanvasMarker.Dot).bounds(0, 10, 0, 10);
+    c.rect(0, 0, 10, 10, Style.new());
+    Rect area = Rect.new((u16)0, (u16)0, (u16)12, (u16)6);
+    Buffer buf = Buffer.empty(area);
+    c.render(&area, &buf);
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(0, 5).ch, "bottom-left corner");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(11, 5).ch, "bottom-right corner");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(0, 0).ch, "top-left corner");
+    assert_eq_i64(0x2022, (i64)buf.cell_mut(11, 0).ch, "top-right corner");
+}
+
+#[test]
+void halfblock_merges_top_and_bottom() {
+    // y range 0..3 over 2 rows: y=3 is top half of row 0, y=2 bottom half.
+    Canvas top = Canvas.new().bounds(0, 10, 0, 3);
+    top.point(0, 3, Style.new());
+    Rect area = Rect.new((u16)0, (u16)0, (u16)12, (u16)2);
+    Buffer top_buf = Buffer.empty(area);
+    top.render(&area, &top_buf);
+    assert_eq_i64(0x2580, (i64)top_buf.cell_mut(0, 0).ch, "upper half alone");
+    Canvas both = Canvas.new().bounds(0, 10, 0, 3);
+    both.point(0, 3, Style.new());
+    both.point(0, 2, Style.new());
+    Buffer both_buf = Buffer.empty(area);
+    both.render(&area, &both_buf);
+    assert_eq_i64(0x2588, (i64)both_buf.cell_mut(0, 0).ch, "both halves merge full");
+}
+
+#[test]
+void out_of_bounds_and_degenerate_bounds_stay_empty() {
+    Canvas c = Canvas.new().marker(CanvasMarker.Dot).bounds(0, 10, 0, 10);
+    c.point(50, 50, Style.new());
+    Rect area = Rect.new((u16)0, (u16)0, (u16)12, (u16)6);
+    Buffer buf = Buffer.empty(area);
+    c.render(&area, &buf);
+    assert_eq_i64(0, (i64)buf.cell_mut(11, 0).ch, "far point clips instead of streaking");
+    Canvas flat = Canvas.new().bounds(5, 5, 0, 10);
+    flat.point(5, 5, Style.new());
+    Buffer flat_buf = Buffer.empty(area);
+    flat.render(&area, &flat_buf);
+    assert_eq_i64(0, (i64)flat_buf.cell_mut(0, 0).ch, "degenerate bounds render nothing");
+}

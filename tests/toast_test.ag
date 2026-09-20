@@ -1,0 +1,33 @@
+import atelier.widgets.toast;
+import atelier.buffer;
+import atelier.layout;
+import std.test;
+
+#[test]
+void toasts_stack_latest_at_bottom() {
+    Toasts toasts = Toasts.new();
+    toasts.push("first", LogLevel.Info, 5000);
+    toasts.push("boom", LogLevel.Error, 5000);
+    assert_eq_i64(2, toasts.len(), "two live toasts");
+    Rect area = Rect.new((u16)0, (u16)0, (u16)12, (u16)2);
+    Buffer buf = Buffer.empty(area);
+    toasts.render(&area, &buf);
+    assert_eq_i64(69, (i64)buf.cell_mut(0, 1).ch, "latest anchors bottom");
+    assert_eq_i64(73, (i64)buf.cell_mut(0, 0).ch, "older stacks above");
+    assert_eq_i64(98, (i64)buf.cell_mut(4, 1).ch, "latest text follows tag");
+}
+
+#[test]
+void advance_retires_expired_first() {
+    Toasts toasts = Toasts.new();
+    toasts.push("fast", LogLevel.Info, 100);
+    toasts.push("slow", LogLevel.Info, 1000);
+    assert_eq_i64(2, toasts.advance(99), "just inside ttl stays live");
+    assert_eq_i64(1, toasts.advance(1), "one tick past expiry retires");
+    assert_eq_i64(115, (i64)toasts.items.get_ptr(0).text.to_str()[0], "survivor is slow");
+    Rect area = Rect.new((u16)0, (u16)0, (u16)12, (u16)2);
+    Buffer buf = Buffer.empty(area);
+    toasts.render(&area, &buf);
+    assert_eq_i64(115, (i64)buf.cell_mut(4, 1).ch, "only survivor renders");
+    assert_eq_i64(0, toasts.advance(10000), "queue drains fully");
+}

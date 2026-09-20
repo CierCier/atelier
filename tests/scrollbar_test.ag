@@ -3,8 +3,8 @@ import atelier.buffer;
 import atelier.layout;
 import std.test;
 
-i32 main() {
-    test_start("scrollbar maps position to thumb");
+#[test]
+void scrollbar_maps_position_to_thumb() {
     Rect area = Rect.new((u16)0, (u16)0, (u16)1, (u16)10);
     Buffer buf = Buffer.empty(area);
     Scrollbar bar = Scrollbar.new();
@@ -16,5 +16,32 @@ i32 main() {
     buf.reset();
     bar.render(&area, &buf, &state);
     assert_eq_i64(0x2588, (i64)buf.cell_mut(0, 9).ch, "thumb reaches bottom");
-    return done();
+}
+
+#[test]
+void horizontal_scrollbar_tracks_columns() {
+    Rect area = Rect.new((u16)0, (u16)0, (u16)10, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    Scrollbar bar = Scrollbar.new().orientation(ScrollbarOrientation.Horizontal);
+    ScrollbarState state = ScrollbarState.new(100);
+    state.set_position(0);
+    bar.render(&area, &buf, &state);
+    assert_eq_i64(0x2588, (i64)buf.cell_mut(0, 0).ch, "thumb starts at left");
+    state.set_position(99);
+    buf.reset();
+    bar.render(&area, &buf, &state);
+    assert_eq_i64(0x2588, (i64)buf.cell_mut(9, 0).ch, "thumb reaches right");
+}
+
+#[test]
+void end_symbols_cap_the_track() {
+    Rect area = Rect.new((u16)0, (u16)0, (u16)1, (u16)5);
+    Buffer buf = Buffer.empty(area);
+    Scrollbar bar = Scrollbar.new().end_symbols("▲", "▼");
+    ScrollbarState state = ScrollbarState.new(100);
+    state.set_position(0);
+    bar.render(&area, &buf, &state);
+    assert_eq_i64(0x25B2, (i64)buf.cell_mut(0, 0).ch, "begin symbol caps top");
+    assert_eq_i64(0x25BC, (i64)buf.cell_mut(0, 4).ch, "end symbol caps bottom");
+    assert_eq_i64(0x2588, (i64)buf.cell_mut(0, 1).ch, "thumb travels between caps");
 }
