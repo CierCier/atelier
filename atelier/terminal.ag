@@ -116,6 +116,77 @@ void term_write_sgr_num(BufWriter* out, i64 n) {
     out.write_u8((u8)109); // 'm'
 }
 
+/// SGR foreground parameters only, no CSI prefix or 'm' terminator: for use
+/// inside combined sequences. Default is 39; bright bases are 90-97.
+void term_write_fg_inner(BufWriter* out, &Color c) {
+    match *c {
+        Black : { term_write_num(out, 30); },
+        Red : { term_write_num(out, 31); },
+        Green : { term_write_num(out, 32); },
+        Yellow : { term_write_num(out, 33); },
+        Blue : { term_write_num(out, 34); },
+        Magenta : { term_write_num(out, 35); },
+        Cyan : { term_write_num(out, 36); },
+        White : { term_write_num(out, 37); },
+        BrightBlack : { term_write_num(out, 90); },
+        BrightRed : { term_write_num(out, 91); },
+        BrightGreen : { term_write_num(out, 92); },
+        BrightYellow : { term_write_num(out, 93); },
+        BrightBlue : { term_write_num(out, 94); },
+        BrightMagenta : { term_write_num(out, 95); },
+        BrightCyan : { term_write_num(out, 96); },
+        BrightWhite : { term_write_num(out, 97); },
+        Indexed(n) : {
+            out.write_str("38;5;");
+            term_write_num(out, (i64)n);
+        },
+        Rgb(r, g, b) : {
+            out.write_str("38;2;");
+            term_write_num(out, (i64)r);
+            out.write_u8((u8)59);
+            term_write_num(out, (i64)g);
+            out.write_u8((u8)59);
+            term_write_num(out, (i64)b);
+        },
+        _ : { term_write_num(out, 39); },
+    }
+}
+
+/// SGR background parameters only: default 49, bright bases 100-107.
+void term_write_bg_inner(BufWriter* out, &Color c) {
+    match *c {
+        Black : { term_write_num(out, 40); },
+        Red : { term_write_num(out, 41); },
+        Green : { term_write_num(out, 42); },
+        Yellow : { term_write_num(out, 43); },
+        Blue : { term_write_num(out, 44); },
+        Magenta : { term_write_num(out, 45); },
+        Cyan : { term_write_num(out, 46); },
+        White : { term_write_num(out, 47); },
+        BrightBlack : { term_write_num(out, 100); },
+        BrightRed : { term_write_num(out, 101); },
+        BrightGreen : { term_write_num(out, 102); },
+        BrightYellow : { term_write_num(out, 103); },
+        BrightBlue : { term_write_num(out, 104); },
+        BrightMagenta : { term_write_num(out, 105); },
+        BrightCyan : { term_write_num(out, 106); },
+        BrightWhite : { term_write_num(out, 107); },
+        Indexed(n) : {
+            out.write_str("48;5;");
+            term_write_num(out, (i64)n);
+        },
+        Rgb(r, g, b) : {
+            out.write_str("48;2;");
+            term_write_num(out, (i64)r);
+            out.write_u8((u8)59);
+            term_write_num(out, (i64)g);
+            out.write_u8((u8)59);
+            term_write_num(out, (i64)b);
+        },
+        _ : { term_write_num(out, 49); },
+    }
+}
+
 /// Resolve a cell to its glyph: 0 (empty) renders as a space. Wide leads
 // already carry their own trailer bookkeeping via continuation cells.
 u32 cell_glyph(&Cell c) {
@@ -125,9 +196,128 @@ u32 cell_glyph(&Cell c) {
     return c.ch;
 }
 
+/// Emit a reset-free style: only the attributes that differ from `from`
+/// (an optional baseline) are written, in one combined SGR sequence. When
+/// `from` carries modifiers, fg/bg SGR codes naturally do not disturb them,
+/// so bold/dim/italic survive recolors instead of flickering off and on.
+/// Pass from == 0 for a blank baseline; mods never added implicitly.
+void term_write_style_diff(BufWriter* out, &Style s, Style* from) {
+    bool fg_diff = true;
+    bool bg_diff = true;
+    u16 old_mods = (u16)0;
+    if (from != (Style*)0) {
+        fg_diff = s.fg != (*from).fg;
+        bg_diff = s.bg != (*from).bg;
+        old_mods = (*from).add_mod & ~(*from).sub_mod;
+        if (!fg_diff && !bg_diff && s.add_mod == (*from).add_mod && s.sub_mod == (*from).sub_mod) {
+            return;
+        }
+    }
+    u16 mods = s.add_mod & ~s.sub_mod;
+    bool mods_diff = mods != old_mods;
+    if (!fg_diff && !bg_diff && !mods_diff) {
+        return;
+    }
+    term_write_csi(out);
+    bool any = false;
+    if (mods_diff) {
+        // Turn off exactly the bits the baseline added that we do not want;
+        // then add ours. (22=bold/dim off, 23=italic off, 29=crossed off,
+        // 24=underline off, 25=blink off, 27=reversed off, 28=hidden off.)
+        u16 off = old_mods & ~mods;
+        if ((off & MOD_BOLD) != (u16)0 || (off & MOD_DIM) != (u16)0) {
+            term_write_num(out, 22);
+            any = true;
+        }
+        if ((off & MOD_ITALIC) != (u16)0) {
+            term_write_num(out, 23);
+            any = true;
+        }
+        if ((off & MOD_UNDERLINED) != (u16)0) {
+            term_write_num(out, 24);
+            any = true;
+        }
+        if ((off & (MOD_SLOW_BLINK | MOD_RAPID_BLINK)) != (u16)0) {
+            term_write_num(out, 25);
+            any = true;
+        }
+        if ((off & MOD_REVERSED) != (u16)0) {
+            term_write_num(out, 27);
+            any = true;
+        }
+        if ((off & MOD_HIDDEN) != (u16)0) {
+            term_write_num(out, 28);
+            any = true;
+        }
+        if ((off & MOD_CROSSED_OUT) != (u16)0) {
+            term_write_num(out, 29);
+            any = true;
+        }
+        if ((mods & MOD_BOLD) != (u16)0) {
+            if (any) { out.write_u8((u8)59); }
+            term_write_num(out, 1);
+            any = true;
+        }
+        if ((mods & MOD_DIM) != (u16)0) {
+            if (any) { out.write_u8((u8)59); }
+            term_write_num(out, 2);
+            any = true;
+        }
+        if ((mods & MOD_ITALIC) != (u16)0) {
+            if (any) { out.write_u8((u8)59); }
+            term_write_num(out, 3);
+            any = true;
+        }
+        if ((mods & MOD_UNDERLINED) != (u16)0) {
+            if (any) { out.write_u8((u8)59); }
+            term_write_num(out, 4);
+            any = true;
+        }
+        if ((mods & MOD_SLOW_BLINK) != (u16)0) {
+            if (any) { out.write_u8((u8)59); }
+            term_write_num(out, 5);
+            any = true;
+        }
+        if ((mods & MOD_RAPID_BLINK) != (u16)0) {
+            if (any) { out.write_u8((u8)59); }
+            term_write_num(out, 6);
+            any = true;
+        }
+        if ((mods & MOD_REVERSED) != (u16)0) {
+            if (any) { out.write_u8((u8)59); }
+            term_write_num(out, 7);
+            any = true;
+        }
+        if ((mods & MOD_HIDDEN) != (u16)0) {
+            if (any) { out.write_u8((u8)59); }
+            term_write_num(out, 8);
+            any = true;
+        }
+        if ((mods & MOD_CROSSED_OUT) != (u16)0) {
+            if (any) { out.write_u8((u8)59); }
+            term_write_num(out, 9);
+            any = true;
+        }
+    }
+    if (fg_diff) {
+        if (any) { out.write_u8((u8)59); }
+        term_write_fg_inner(out, &s.fg);
+        any = true;
+    }
+    if (bg_diff) {
+        if (any) { out.write_u8((u8)59); }
+        term_write_bg_inner(out, &s.bg);
+        any = true;
+    }
+    if (any) {
+        out.write_u8((u8)109); // 'm'
+    }
+}
+
+/// Emit one raw SGR numeric attribute (for modifiers std.term lacks).
 void term_write_mods(BufWriter* out, u16 mods) {
     if ((mods & MOD_BOLD) != (u16)0) {
-        term_bold_on(out);
+        term_write_sgr_num(out, 1);
     }
     if ((mods & MOD_DIM) != (u16)0) {
         term_write_sgr_num(out, 2);
@@ -136,7 +326,7 @@ void term_write_mods(BufWriter* out, u16 mods) {
         term_write_sgr_num(out, 3);
     }
     if ((mods & MOD_UNDERLINED) != (u16)0) {
-        term_underline_on(out);
+        term_write_sgr_num(out, 4);
     }
     if ((mods & MOD_SLOW_BLINK) != (u16)0) {
         term_write_sgr_num(out, 5);
@@ -153,15 +343,6 @@ void term_write_mods(BufWriter* out, u16 mods) {
     if ((mods & MOD_CROSSED_OUT) != (u16)0) {
         term_write_sgr_num(out, 9);
     }
-}
-
-/// Full style re-emit from a reset baseline (always correct, slightly
-/// verbose; the diff layer ensures it only runs on real changes).
-void term_write_style(BufWriter* out, &Style s) {
-    term_sgr_reset(out);
-    term_write_fg(out, &s.fg);
-    term_write_bg(out, &s.bg);
-    term_write_mods(out, s.add_mod & ~s.sub_mod);
 }
 
 impl Terminal {
@@ -292,8 +473,9 @@ impl Terminal {
     ///
     /// Output is emitted as row runs: one cursor move, then every changed
     /// cell on that row — styled cells inline, unchanged neighbors elided by
-    /// repositioning. Contiguous single-line output reaches the terminal as
-    /// one chunk, which is what makes frames tear-free.
+    /// repositioning. Gaps of same-style glyphs are rewritten instead of
+    /// skipped, so a dirty run with small holes still lands as one chunk —
+    /// that is what makes frames tear-free.
     void flush(&mut self) {
         Vec<CellUpdate> d = self.cur.diff(&self.prev);
         i64 n = d.len();
@@ -335,18 +517,47 @@ impl Terminal {
                 cs.bg = c.cell.bg;
                 cs.add_mod = c.cell.mods;
                 cs.sub_mod = (u16)0;
-                if (cs.fg != self.pen.fg || cs.bg != self.pen.bg || cs.add_mod != self.pen.add_mod) {
-                    term_write_style(self.out, &cs);
-                    self.pen = cs;
-                }
+                term_write_style_diff(self.out, &cs, &self.pen);
+                self.pen = cs;
                 write_codepoint(self.out, cell_glyph(&c.cell));
+                bool wide = false;
                 Cell* nxt = self.cur.cell_mut(cx + 1, y);
                 if (nxt != (Cell*)0 && nxt.continuation) {
+                    wide = true;
                     self.pen_x = cx + 2;
                 } else {
                     self.pen_x = cx + 1;
                 }
                 k = k + 1;
+                // Gap fill: rewrite a short run of unchanged, style-equal,
+                // narrow cells between updates. A cursor move costs about as
+                // much as the glyphs and can split the row into two chunks
+                // (tearing); three-glyph gaps cost ~1 byte per cell.
+                if (!wide) {
+                    while (k < j) {
+                        CellUpdate* g = d.get_ptr(k);
+                        i64 gx = (i64)g.x;
+                        if (g.cell.continuation || gx != self.pen_x) {
+                            break;
+                        }
+                        Style gs;
+                        gs.fg = g.cell.fg;
+                        gs.bg = g.cell.bg;
+                        gs.add_mod = g.cell.mods;
+                        gs.sub_mod = (u16)0;
+                        if (gs.fg != cs.fg || gs.bg != cs.bg || gs.add_mod != cs.add_mod) {
+                            break;
+                        }
+                        // Only rewrite when the previous cell's style still
+                        // matches (no hidden style change mid-gap) and the
+                        // cell content is what we expect (narrow, unchanged).
+                        term_write_style_diff(self.out, &gs, &self.pen);
+                        self.pen = gs;
+                        write_codepoint(self.out, cell_glyph(&g.cell));
+                        self.pen_x = gx + 1;
+                        k = k + 1;
+                    }
+                }
             }
             i = j;
         }
