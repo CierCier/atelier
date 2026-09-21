@@ -3,6 +3,14 @@ import atelier.buffer;
 import atelier.layout;
 import std.test;
 
+i64 cp(Buffer* buf, i64 x, i64 y) {
+    Cell* c = buf.cell_mut(x, y);
+    if (c == (Cell*)0) {
+        return 0;
+    }
+    return (i64)c.ch;
+}
+
 #[test]
 void gauge_fills_by_percentage() {
     Rect area = Rect.new((u16)0, (u16)0, (u16)10, (u16)1);
@@ -87,4 +95,52 @@ void bar_chart_fractional_tip_and_centered_spinner() {
     tall_spin.render(&spin_area, &spin_buf);
     assert_eq_i64(0, (i64)spin_buf.cell_mut(0, 0).ch, "spinner leaves top row empty");
     assert_eq_i64(0x280B, (i64)spin_buf.cell_mut(0, 1).ch, "spinner centers vertically");
+}
+
+#[test]
+void sparkline_rtl_mirrors_flow() {
+    // Two values, 4-wide window: values [100, 0] — newest is 0.
+    Vec<u16> values = Vec<u16>.new();
+    values.push((u16)100);
+    values.push((u16)0);
+    Sparkline spark = Sparkline.new(move values).max_value((u16)100);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)4, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    spark.render(&area, &buf);
+    // LTR partial window hugs the right edge: untouched, untouched, █, blank.
+    assert_eq_i64(0, cp(&buf, 0, 0), "ltr partial window leaves left untouched");
+    assert_eq_i64(0x2588, cp(&buf, 2, 0), "ltr history sits left of newest");
+    Vec<u16> back = Vec<u16>.new();
+    back.push((u16)100);
+    back.push((u16)0);
+    Sparkline rtl = Sparkline.new(move back).max_value((u16)100).rtl(true);
+    Buffer rtl_buf = Buffer.empty(area);
+    rtl.render(&area, &rtl_buf);
+    // RTL mirrors: newest at the left edge, history flowing rightward.
+    assert_eq_i64(0x20, cp(&rtl_buf, 0, 0), "rtl newest value at left edge");
+    assert_eq_i64(0x2588, cp(&rtl_buf, 1, 0), "rtl history flows rightward");
+    assert_eq_i64(0, cp(&rtl_buf, 3, 0), "rtl right side stays untouched");
+    // Full window: values [0, 100, 0, 50], newest (50) at the right in LTR,
+    // at the left in RTL.
+    Vec<u16> full = Vec<u16>.new();
+    full.push((u16)0);
+    full.push((u16)100);
+    full.push((u16)0);
+    full.push((u16)50);
+    Sparkline full_rtl = Sparkline.new(move full).max_value((u16)100).rtl(true);
+    Buffer full_buf = Buffer.empty(area);
+    full_rtl.render(&area, &full_buf);
+    assert_eq_i64(0x2584, cp(&full_buf, 0, 0), "rtl newest value lands at the left edge");
+    assert_eq_i64(0x20, cp(&full_buf, 1, 0), "rtl next-newest zero renders as blank tick");
+    assert_eq_i64(0x2588, cp(&full_buf, 2, 0), "rtl 100 follows rightward");
+    // LTR twin for contrast: newest at the right edge.
+    Vec<u16> full_copy = Vec<u16>.new();
+    full_copy.push((u16)0);
+    full_copy.push((u16)100);
+    full_copy.push((u16)0);
+    full_copy.push((u16)50);
+    Sparkline full_ltr = Sparkline.new(move full_copy).max_value((u16)100);
+    Buffer ltr_buf = Buffer.empty(area);
+    full_ltr.render(&area, &ltr_buf);
+    assert_eq_i64(0x2584, cp(&ltr_buf, 3, 0), "ltr newest value stays at the right edge");
 }

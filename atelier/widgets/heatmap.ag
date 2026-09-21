@@ -1,0 +1,221 @@
+// Heatmap: value matrix rendered as a cell-intensity grid.
+//
+// Cell geometry is 2 cells wide (square-ish since terminals render ~2:1
+// characters) plus an optional 1-cell column gap; rows sit flush. Values
+// are clamped to [lo, hi], so over/underflow saturates at the ramp edges
+// rather than wrapping. The default ramp is five color steps (dim →
+// bright green); supply a custom one to shade by category (e.g. low/med/
+// high in distinct hues). The bottom legend row shows lo and hi, which
+// reserves a row; disable with show_legend(false).
+
+import std.mem.vec;
+import std.fmt;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+
+struct HeatCell {
+    i64 value;
+    Style style;
+}
+
+impl HeatCell {
+    HeatCell new(i64 value) {
+        HeatCell c;
+        c.value = value;
+        c.style = Style.new();
+        return move c;
+    }
+
+    HeatCell styled(i64 value, Style style) {
+        HeatCell c = HeatCell.new(value);
+        c.style = style;
+        return move c;
+    }
+}
+
+struct Heatmap {
+    Vec<HeatCell> values;
+    i64 cols;
+    i64 rows;
+    i64 lo;
+    i64 hi;
+    Vec<Style> ramp;
+    UpdateInterval cadence;
+    Style style;
+    Style legend_style;
+    Block block;
+    bool has_block;
+    bool show_legend;
+}
+
+impl Heatmap {
+    // Cols/rows are fixed at construction: an index outside the declared
+    // grid is ignored (set silently) so late row counts cannot corrupt
+    // row-major indexing.
+    Heatmap new(i64 cols, i64 rows, Vec<HeatCell> values) {
+        Heatmap h;
+        h.values = move values;
+        h.cols = cols;
+        h.rows = rows;
+        h.lo = 0;
+        h.hi = 100;
+        // Five color steps over full blocks; glyphs never change, only hue.
+        Vec<Style> default_ramp = Vec<Style>.new();
+        default_ramp.push(Style.new().fg(Color.BrightBlack));
+        default_ramp.push(Style.new().fg(Color.Blue));
+        default_ramp.push(Style.new().fg(Color.Cyan));
+        default_ramp.push(Style.new().fg(Color.Green));
+        default_ramp.push(Style.new().fg(Color.BrightGreen));
+        h.ramp = move default_ramp;
+        h.cadence = UpdateInterval.new(0);
+        h.style = Style.new();
+        h.legend_style = Style.new().fg(Color.BrightBlack);
+        h.block = Block.new();
+        h.has_block = false;
+        h.show_legend = true;
+        return move h;
+    }
+
+    Heatmap bounds(Heatmap self, i64 lo, i64 hi) {
+        self.lo = lo;
+        self.hi = hi;
+        return move self;
+    }
+
+    Heatmap ramp(Heatmap self, Vec<Style> ramp) {
+        self.ramp = move ramp;
+        return move self;
+    }
+
+    Heatmap style(Heatmap self, Style style) {
+        self.style = style;
+        return move self;
+    }
+
+    Heatmap legend_style(Heatmap self, Style style) {
+        self.legend_style = style;
+        return move self;
+    }
+
+    Heatmap block(Heatmap self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return move self;
+    }
+
+    Heatmap show_legend(Heatmap self, bool show) {
+        self.show_legend = show;
+        return move self;
+    }
+
+    Heatmap update_interval(Heatmap self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return move self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+
+    void set(&mut self, i64 col, i64 row, i64 value) {
+        if (col < 0 || row < 0 || col >= self.cols || row >= self.rows) {
+            return;
+        }
+        i64 idx = row * self.cols + col;
+        while (self.values.len() <= idx) {
+            self.values.push(HeatCell.new(0));
+        }
+        HeatCell* cell = self.values.get_ptr(idx);
+        cell.value = value;
+    }
+}
+
+impl Widget for Heatmap {
+    void render(&self, &Rect area, &mut Buffer buf) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+        i64 width = (i64)inner.width;
+        i64 height = (i64)inner.height;
+        // Cell width 2 + optional 1-cell gap; rows sit flush.
+        i64 stride = 2;
+        if (self.cols > 1) {
+            stride = 3;
+        }
+        i64 legend_rows = 0;
+        if (self.show_legend && height > 1) {
+            legend_rows = 1;
+        }
+        i64 grid_h = height - legend_rows;
+        i64 visible_cols = (width + (stride - 2)) / stride;
+        i64 visible_rows = grid_h;
+        if (visible_cols > self.cols) {
+            visible_cols = self.cols;
+        }
+        if (visible_rows > self.rows) {
+            visible_rows = self.rows;
+        }
+        i64 ramp_n = self.ramp.len();
+        if (ramp_n <= 0) {
+            return;
+        }
+        for (i64 row = 0; row < visible_rows; row = row + 1) {
+            i64 y = (i64)inner.y + row;
+            for (i64 col = 0; col < visible_cols; col = col + 1) {
+                i64 idx = row * self.cols + col;
+                if (idx >= self.values.len()) {
+                    continue;
+                }
+                HeatCell* cell = self.values.get_ptr(idx);
+                i64 v = cell.value;
+                if (v < self.lo) {
+                    v = self.lo;
+                }
+                if (v > self.hi) {
+                    v = self.hi;
+                }
+                i64 level = 0;
+                if (self.hi > self.lo) {
+                    level = (v - self.lo) * ramp_n / (self.hi - self.lo);
+                    if (level >= ramp_n) {
+                        level = ramp_n - 1;
+                    }
+                }
+                Style base = self.ramp.get(level);
+                Style cell_style = base.patch(cell.style);
+                i64 x = (i64)inner.x + col * stride;
+                buf.set_string(x, y, "██", cell_style, (i64)inner.x + width - x);
+                // Gap columns stay untouched: set_style already applied the
+                // widget style to every inner cell (see Table spacing).
+            }
+        }
+        if (legend_rows > 0) {
+            String low = @format("{}", self.lo);
+            String high = @format("{}", self.hi);
+            i64 ly = (i64)inner.y + height - 1;
+            buf.set_string((i64)inner.x, ly, low.to_str(), self.legend_style, width);
+            i64 hx = (i64)inner.x + width - text_width(high.to_str());
+            if (hx < (i64)inner.x) {
+                hx = (i64)inner.x;
+            }
+            buf.set_string(hx, ly, high.to_str(), self.legend_style, (i64)inner.x + width - hx);
+            low.drop();
+            high.drop();
+        }
+    }
+}

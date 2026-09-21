@@ -129,6 +129,10 @@ struct Sparkline {
     Style style;
     Block block;
     bool has_block;
+    // false: time flows left→right, newest value at the right edge
+    // (default). true: mirrored for RTL time axes — newest value at the
+    // left edge, history growing rightward.
+    bool rtl;
 }
 
 struct BarItem {
@@ -334,6 +338,7 @@ impl Sparkline {
         s.style = Style.new();
         s.block = Block.new();
         s.has_block = false;
+        s.rtl = false;
         return move s;
     }
 
@@ -350,6 +355,13 @@ impl Sparkline {
     Sparkline block(Sparkline self, Block block) {
         self.block = block;
         self.has_block = true;
+        return self;
+    }
+
+    // RTL mirrors the whole flow: newest values anchor at the left edge
+    // and history grows rightward, matching right-to-left time axes.
+    Sparkline rtl(Sparkline self, bool rtl) {
+        self.rtl = rtl;
         return self;
     }
 
@@ -400,15 +412,22 @@ impl Widget for Sparkline {
                 }
             }
         }
-        i64 x = (i64)inner.x + ((i64)inner.width - (n - start));
-        for (i64 i = start; i < n; i = i + 1) {
-            u16 value = self.values.get(i);
-            i64 level = (i64)value * 8 / (i64)max_value;
-            if (level > 8) {
-                level = 8;
+        // Default flows left→right (newest at the right edge, partial
+        // windows hugging it); rtl mirrors everything: newest at the left
+        // edge, history growing rightward, blanks on the right.
+        i64 y = (i64)inner.y + (i64)inner.height - 1;
+        if (self.rtl) {
+            i64 x = (i64)inner.x;
+            for (i64 i = n - 1; i >= start; i = i - 1) {
+                buf.set_string(x, y, spark_glyph(self.values.get(i), max_value), self.style, 1);
+                x = x + 1;
             }
-            buf.set_string(x, (i64)inner.y + (i64)inner.height - 1, spark_level(level), self.style, 1);
-            x = x + 1;
+        } else {
+            i64 x = (i64)inner.x + ((i64)inner.width - (n - start));
+            for (i64 i = start; i < n; i = i + 1) {
+                buf.set_string(x, y, spark_glyph(self.values.get(i), max_value), self.style, 1);
+                x = x + 1;
+            }
         }
     }
 }
@@ -425,6 +444,14 @@ str spark_level(i64 level) {
     return "█";
 }
 
+str spark_glyph(u16 value, u16 max_value) {
+    i64 level = (i64)value * 8 / (i64)max_value;
+    if (level > 8) {
+        level = 8;
+    }
+    return spark_level(level);
+}
+
 str hbar_tip(i64 eighth) {
     if (eighth <= 0) { return " "; }
     if (eighth == 1) { return "▏"; }
@@ -434,6 +461,18 @@ str hbar_tip(i64 eighth) {
     if (eighth == 5) { return "▋"; }
     if (eighth == 6) { return "▊"; }
     if (eighth == 7) { return "▉"; }
+    return "█";
+}
+
+str vbar_tip(i64 eighth) {
+    if (eighth <= 0) { return " "; }
+    if (eighth == 1) { return "▁"; }
+    if (eighth == 2) { return "▂"; }
+    if (eighth == 3) { return "▃"; }
+    if (eighth == 4) { return "▄"; }
+    if (eighth == 5) { return "▅"; }
+    if (eighth == 6) { return "▆"; }
+    if (eighth == 7) { return "▇"; }
     return "█";
 }
 

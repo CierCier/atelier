@@ -1,0 +1,114 @@
+import atelier.widgets.markdown;
+import atelier.widgets.paragraph;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.widget;
+import std.test;
+
+bool streq(str a, str b) {
+    u8* pa = (u8*)a;
+    u8* pb = (u8*)b;
+    i64 la = cstr_len(pa);
+    i64 lb = cstr_len(pb);
+    if (la != lb) {
+        return false;
+    }
+    for (i64 i = 0; i < la; i = i + 1) {
+        if (pa[i] != pb[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+#[test]
+void headings_style_by_level() {
+    Markdown md = Markdown.new();
+    Text t = md.parse("# Title\n## Sub\n### Deep\n#### Deeper");
+    assert_eq_i64(4, t.height(), "four heading lines");
+    Color blue = Color.Blue;
+    assert_true(t.line_at(0).spans.get_ptr(0).style.fg == blue, "h1 blue");
+    Color cyan = Color.Cyan;
+    assert_true(t.line_at(1).spans.get_ptr(0).style.fg == cyan, "h2 cyan");
+    Color green = Color.Green;
+    assert_true(t.line_at(2).spans.get_ptr(0).style.fg == green, "h3 green");
+    assert_true(t.line_at(3).spans.get_ptr(0).style.fg == green, "h4 falls back to h3");
+    assert_true(streq(t.line_at(0).spans.get_ptr(0).text, "Title"), "hash prefix stripped");
+}
+
+#[test]
+void inline_marks_bold_italic_code() {
+    Markdown md = Markdown.new();
+    Text t = md.parse("a **b** c *d* e `f` g");
+    Line* line = t.line_at(0);
+    assert_eq_i64(7, line.span_count(), "segments split around marks");
+    assert_true(streq(line.span_at(1).text, "b"), "bold text kept");
+    assert_true((line.span_at(1).style.add_mod & MOD_BOLD) != (u16)0, "bold modifier set");
+    assert_true(streq(line.span_at(3).text, "d"), "italic text kept");
+    assert_true((line.span_at(3).style.add_mod & MOD_ITALIC) != (u16)0, "italic modifier set");
+    assert_true(streq(line.span_at(5).text, "f"), "code text kept");
+    Color yellow = Color.Yellow;
+    assert_true(line.span_at(5).style.fg == yellow, "code colors yellow");
+}
+
+#[test]
+void fence_renders_code_lines() {
+    Markdown md = Markdown.new();
+    Text t = md.parse("before\n```rust\nlet x = 1;\n```\nafter");
+    assert_eq_i64(3, t.height(), "fences consumed, content kept");
+    assert_true(streq(t.line_at(1).spans.get_ptr(0).text, "let x = 1;"), "code line kept raw");
+    Color yellow = Color.Yellow;
+    assert_true(t.line_at(1).style.fg == yellow, "code line styled");
+    assert_true(streq(t.line_at(2).spans.get_ptr(0).text, "after"), "text resumes");
+}
+
+#[test]
+void lists_nest_and_number() {
+    Markdown md = Markdown.new();
+    Text t = md.parse("- a\n  - b\n1. one\n2. two");
+    assert_eq_i64(4, t.height(), "four items");
+    assert_true(streq(t.line_at(0).spans.get_ptr(0).text, "• "), "bullet marker");
+    assert_true(streq(t.line_at(1).spans.get_ptr(0).text, "  • "), "nested indents marker");
+    assert_true(streq(t.line_at(1).spans.get_ptr(1).text, "b"), "nested text follows");
+    assert_true(streq(t.line_at(2).spans.get_ptr(0).text, "1. "), "ordered numbers");
+    assert_true(streq(t.line_at(3).spans.get_ptr(0).text, "2. "), "counter increments");
+}
+
+#[test]
+void quote_rule_and_softbreak() {
+    Markdown md = Markdown.new();
+    Text t = md.parse("> cited\nfirst\nsecond\n---");
+    assert_eq_i64(3, t.height(), "quote, joined paragraph, rule");
+    assert_true(streq(t.line_at(0).spans.get_ptr(0).text, "▌ "), "quote marker");
+    Color cyan = Color.Cyan;
+    assert_true(t.line_at(0).spans.get_ptr(0).style.fg == cyan, "quote styled");
+    assert_true(streq(t.line_at(1).spans.get_ptr(0).text, "first second"), "softbreak joins");
+    assert_true(streq(t.line_at(2).spans.get_ptr(0).text, "---"), "rule kept dim literal");
+}
+
+#[test]
+void links_and_escapes() {
+    Markdown md = Markdown.new();
+    Text t = md.parse("[docs](https://x) and \\*literal\\*");
+    Line* line = t.line_at(0);
+    assert_true(streq(line.span_at(0).text, "docs"), "link text kept");
+    assert_true((line.span_at(0).style.add_mod & MOD_UNDERLINED) != (u16)0, "link underlined");
+    Text full = md.parse("[docs](https://x) and \\*literal\\*");
+    Paragraph para = Paragraph.new(move full).wrap(false);
+    Rect row = Rect.new((u16)0, (u16)0, (u16)20, (u16)1);
+    Buffer row_buf = Buffer.empty(row);
+    para.render(&row, &row_buf);
+    assert_eq_i64(42, (i64)row_buf.cell_mut(9, 0).ch, "escaped star renders");
+    assert_eq_i64(108, (i64)row_buf.cell_mut(10, 0).ch, "literal follows escape");
+    assert_eq_i64(42, (i64)row_buf.cell_mut(17, 0).ch, "closing escape renders");
+}
+
+#[test]
+void snake_case_survives() {
+    Markdown md = Markdown.new();
+    Text t = md.parse("cell_mut and foo_bar_baz");
+    assert_eq_i64(1, t.line_at(0).span_count(), "no underscore toggling");
+    assert_true(streq(t.line_at(0).spans.get_ptr(0).text, "cell_mut and foo_bar_baz"), "text intact");
+}

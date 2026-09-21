@@ -32,6 +32,10 @@ impl UpdateInterval {
 
     /// Add elapsed time and return how many update boundaries were crossed.
     /// A zero interval is manual-only and never becomes due automatically.
+    /// Runs can deliver a large `elapsed_ms` (paused render, slow frame);
+    /// `elapsed_ms % interval` after counting steps keeps the fractional
+    /// remainder, so the fractional part is never silently dropped when a
+    /// run spans several boundaries.
     i64 advance(&mut self, i64 elapsed_ms) {
         if (self.interval_ms <= 0 || elapsed_ms <= 0) {
             return 0;

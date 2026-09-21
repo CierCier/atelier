@@ -109,6 +109,9 @@ str component_name(i64 index) {
     if (index == 26) { return "Log"; }
     if (index == 27) { return "Toasts"; }
     if (index == 28) { return "Calendar"; }
+    if (index == 29) { return "Heatmap"; }
+    if (index == 30) { return "ColumnChart"; }
+    if (index == 31) { return "Markdown"; }
     return "Buffer";
 }
 
@@ -143,6 +146,9 @@ Vec<ListItem> showcase_items() {
     v.push(ListItem.new("Log — level filter"));
     v.push(ListItem.new("Toasts — expiring notes"));
     v.push(ListItem.new("Calendar — month grid"));
+    v.push(ListItem.new("Heatmap — intensity matrix"));
+    v.push(ListItem.new("ColumnChart — vertical bars"));
+    v.push(ListItem.new("Markdown — chat text"));
     return move v;
 }
 
@@ -365,8 +371,31 @@ i64 pulse_value(i64 tick, i64 phase, i64 max) {
     return position * max / half;
 }
 
+/// Millisecond time base for the previews: each app tick is exactly 100ms,
+/// and `u` steps a tick. Animations interpolate from this instead of
+/// snapping between whole ticks, which is what removes the ticky/clunky feel.
+i64 demo_ms(i64 ticks) {
+    return ticks * 100;
+}
+
+/// Triangle pulse positioned by elapsed milliseconds: period 2000ms,
+/// `phase_ms` offsets the wave. Meters fed with demo_ms(ticks) update at the
+/// 10Hz tick but always land on the time-exact position, so bars glide
+/// instead of stepping between interval-sized plateaus.
+i64 pulse_ms(i64 t_ms, i64 phase_ms, i64 max) {
+    i64 period = 2000;
+    i64 half = period / 2;
+    i64 position = (t_ms + phase_ms) % period;
+    if (position > half) {
+        position = period - position;
+    }
+    return position * max / half;
+}
+
 /// Manual `u` presses simulate 100ms of elapsed time. Each preview chooses
-/// its own cadence, so changing a widget interval changes its visible rate.
+/// its own cadence; one `frame` step is exactly one 100ms tick (the app tick
+/// already quantizes animation state to that boundary, so off-by-one skip
+/// counts would make some previews visibly faster than their interval).
 i64 update_frame(i64 updates, i64 interval_ms) {
     if (interval_ms <= 0) {
         return updates;
@@ -614,7 +643,7 @@ void render_preview_sample(
             tabs.render(area, buf, &tab_state);
         } else if (selected == 9) {
             Gauge gauge = Gauge.new().label("compile").filled_style(accent).block(Block.new().title("build progress")).update_interval(200);
-            i64 percent = pulse_value(update_frame(ticks, gauge.update_interval_ms()), 0, 100);
+            i64 percent = pulse_ms(demo_ms(ticks), 0, 100);
             gauge = gauge.percent((u16)percent);
             gauge.render(area, buf);
         } else if (selected == 10) {
@@ -627,20 +656,32 @@ void render_preview_sample(
             spark.values.push((u16)pulse_value(frame, 9, 100));
             spark.values.push((u16)pulse_value(frame, 12, 100));
             spark.render(area, buf);
+            // RTL twin underneath: newest values at the left edge.
+            if ((i64)area.height >= 4) {
+                Rect lower = Rect.new(area.x, (u16)((i64)area.y + 2), area.width, (u16)1);
+                Vec<u16> rtl_values = Vec<u16>.new();
+                Sparkline rtl_spark = Sparkline.new(move rtl_values).max_value((u16)100).rtl(true).style(accent);
+                i64 rtl_frame = update_frame(ticks, rtl_spark.update_interval_ms());
+                rtl_spark.values.push((u16)pulse_value(rtl_frame, 2, 100));
+                rtl_spark.values.push((u16)pulse_value(rtl_frame, 5, 100));
+                rtl_spark.values.push((u16)pulse_value(rtl_frame, 8, 100));
+                rtl_spark.values.push((u16)pulse_value(rtl_frame, 11, 100));
+                rtl_spark.values.push((u16)pulse_value(rtl_frame, 14, 100));
+                rtl_spark.render(&lower, buf);
+            }
         } else if (selected == 11) {
             Vec<BarItem> bar_items = Vec<BarItem>.new();
             BarChart chart = BarChart.new(move bar_items).max_value((u16)100).bar_style(accent).block(Block.new().title("resource usage")).update_interval(200);
-            i64 frame = update_frame(ticks, chart.update_interval_ms());
-            chart.items.push(BarItem.new("cpu", (u16)pulse_value(frame, 0, 100)));
-            chart.items.push(BarItem.new("memory", (u16)pulse_value(frame, 5, 100)));
-            chart.items.push(BarItem.new("disk", (u16)pulse_value(frame, 10, 100)));
+            chart.items.push(BarItem.new("cpu", (u16)pulse_ms(demo_ms(ticks), 0, 100)));
+            chart.items.push(BarItem.new("memory", (u16)pulse_ms(demo_ms(ticks), 2500, 100)));
+            chart.items.push(BarItem.new("disk", (u16)pulse_ms(demo_ms(ticks), 5000, 100)));
             chart.render(area, buf);
         } else if (selected == 12) {
             Block status = Block.new().title("background task");
             status.render(area, buf);
             Rect inner = status.inner(*area);
             Spinner spinner = Spinner.new("indexing project").style(accent).update_interval(80);
-            spinner.advance(ticks * 100);
+            spinner.advance(demo_ms(ticks));
             spinner.render(&inner, buf);
         } else if (selected == 13) {
             Vec<TableRow> table_rows = Vec<TableRow>.new();
@@ -761,12 +802,11 @@ void render_preview_sample(
                 .hot_style(accent)
                 .trail_style(muted)
                 .trail(4);
-            scanner.advance(ticks * 100);
+            scanner.advance(demo_ms(ticks));
             scanner.render(area, buf);
         } else if (selected == 19) {
             LineGauge meter = LineGauge.new().label("index").filled_style(accent).block(Block.new().title("job progress")).update_interval(200);
-            i64 frame = update_frame(ticks, meter.update_interval_ms());
-            meter = meter.ratio(pulse_value(frame, 0, 100), 100);
+            meter = meter.ratio(pulse_ms(demo_ms(ticks), 0, 100), 100);
             meter.render(area, buf);
         } else if (selected == 20) {
             Vec<ChartSeries> lines = Vec<ChartSeries>.new();
@@ -902,6 +942,33 @@ void render_preview_sample(
             }
             st.select(10 + frame % 8);
             cal.render(area, buf, &st);
+        } else if (selected == 29) {
+            Heatmap map = Heatmap.new(12, 5, Vec<HeatCell>.new()).block(Block.new().title("load matrix")).update_interval(250);
+            i64 frame = update_frame(ticks, map.update_interval_ms());
+            for (i64 row = 0; row < 5; row = row + 1) {
+                for (i64 col = 0; col < 12; col = col + 1) {
+                    map.set(col, row, pulse_value(frame + col * 4 + row * 9, 0, 100));
+                }
+            }
+            map.render(area, buf);
+        } else if (selected == 30) {
+            Vec<ColumnItem> columns = Vec<ColumnItem>.new();
+            columns.push(ColumnItem.new("mo", (u16)pulse_ms(demo_ms(ticks), 300, 100)));
+            columns.push(ColumnItem.new("tu", (u16)pulse_ms(demo_ms(ticks), 1000, 100)));
+            columns.push(ColumnItem.new("we", (u16)pulse_ms(demo_ms(ticks), 1700, 100)));
+            columns.push(ColumnItem.new("th", (u16)pulse_ms(demo_ms(ticks), 2400, 100)));
+            columns.push(ColumnItem.new("fr", (u16)pulse_ms(demo_ms(ticks), 3100, 100)));
+            columns.push(ColumnItem.new("sa", (u16)pulse_ms(demo_ms(ticks), 3800, 100)));
+            columns.push(ColumnItem.new("su", (u16)pulse_ms(demo_ms(ticks), 4500, 100)));
+            ColumnChart cols = ColumnChart.new(move columns).max_value((u16)100).bar_style(accent).block(Block.new().title("weekly load")).update_interval(200);
+            cols.render(area, buf);
+        } else if (selected == 31) {
+            Markdown md = Markdown.new();
+            String chat = @format("# Build report\n\nThe workspace is **ready**. All {} checks *passed*.\n\n- unit tests\n- leak checks\n\n```\n$ agc test --no-cache\nok. {} passed\n```\n\n> ship it when green", 16 + update_frame(ticks, 300) % 2, 27 + update_frame(ticks, 300) % 2);
+            Text doc = md.parse(chat.to_str());
+            Paragraph page = Paragraph.new(move doc).block(Block.new().title("agent message"));
+            page.render(area, buf);
+            chat.drop();
         }
     }
 

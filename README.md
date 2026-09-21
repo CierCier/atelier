@@ -32,6 +32,7 @@ atelier/
     chrome.ag        status key-hint bars, labeled dividers
     overlay.ag       region clear/fill + centered popup rects
     table.ag         columns, headers, footers, selection, scrolling
+    markdown.ag      chat-flavored markdown to styled text
     scrollbar.ag     vertical/horizontal position gutter with end caps
     tree.ag          expandable flat preorder trees
     input.ag         single-line editor state, cursor, masked entry

@@ -8,6 +8,7 @@
 import std.io.file;
 import std.sys.result;
 import std.sys.errno;
+import std.sys.socket;
 import std.time;
 import std.term;
 import atelier.terminal;
@@ -24,7 +25,10 @@ trait App {
 }
 
 const i64 ESC_TIMEOUT_MS = 50;
-const i64 IDLE_SLEEP_MS = 5;
+// Idle poll cap. The loop blocks in poll(2) instead of sleeping in a spin,
+// so this only bounds how late a terminal resize is noticed for tick-less
+// apps; ticked apps wake at their next deadline instead.
+const i64 IDLE_POLL_MS = 250;
 // Focus cell: the single hardware cursor is process-global by nature, so the
 // protocol lives here instead of the App trait (a trait hook would break
 // every existing App impl). The loop clears each frame; a focused widget
@@ -119,13 +123,30 @@ void run_app_view<A>(&mut A app, Viewport port) {
     KeyParser keys = KeyParser.new();
     bool seq_open = false;
     Instant last_byte = now();
-    Instant last_tick = now();
     bool quit = false;
     bool first = true;
     bool cursor_shown = false;
+    // Tick deadlines live on the monotonic clock in ms since `start`.
+    // Firing late never accumulates drift: the next deadline is recomputed
+    // from the current time, and on_tick receives true elapsed ms so
+    // UpdateInterval widgets step the right number of boundaries even
+    // across slow frames.
+    Instant start = now();
+    i64 last_tick_fire = 0;
+    // next_tick = 0 fires the first tick immediately, which also draws the
+    // first frame for ticked apps (tick-less apps draw via `first`).
+    i64 next_tick = 0;
+    // One pollfd for stdin; every idle wait blocks here instead of sleeping
+    // in a spin loop, so idle apps make zero wakeups per frame.
+    PollFd pfd;
+    pfd.fd = 0;
+    pfd.events = (i16)POLLIN;
+    pfd.revents = 0;
     while (!quit) {
         bool activity = first;
         first = false;
+        Duration up = start.elapsed();
+        i64 now_ms = up.as_millis();
 
         // Resize tracking: fullscreen follows both dims, inline only width
         // (its height is reserved, not terminal-sized).
@@ -147,8 +168,13 @@ void run_app_view<A>(&mut A app, Viewport port) {
             }
         }
 
-        // Drain available input bytes.
-        for (i64 n = 0; n < 64; n = n + 1) {
+        // Drain available input bytes. EOF quits; EAGAIN means drained.
+        // A per-pass byte cap keeps a firehose (pasted megabytes) from
+        // starving the tick/draw phases; the next poll returns instantly
+        // while bytes remain. Unparsed escape-sequence bytes keep the
+        // sequence open so the ESC quiet window can resolve a lone ESC.
+        i64 drained = 0;
+        while (drained < 256) {
             u8 byte = 0;
             Result<i64, Error> r = try_read(0, &byte, 1);
             if (r.is_err()) {
@@ -162,6 +188,7 @@ void run_app_view<A>(&mut A app, Viewport port) {
                 quit = true;
                 break;
             }
+            drained = drained + 1;
             last_byte = now();
             Optional<KeyEvent> o = keys.feed(byte);
             if (o.is_none()) {
@@ -195,16 +222,18 @@ void run_app_view<A>(&mut A app, Viewport port) {
             }
         }
 
-        // Tick hook.
+        // Tick hook: fire when the monotonic deadline passes.
         if (!quit) {
             i64 interval = app.tick_ms();
-            if (interval > 0) {
-                Duration since = last_tick.elapsed();
-                if (since.as_millis() >= interval) {
-                    last_tick = now();
-                    app.on_tick(since.as_millis());
-                    activity = true;
+            if (interval > 0 && now_ms >= next_tick) {
+                i64 dt = now_ms - last_tick_fire;
+                if (dt <= 0) {
+                    dt = interval;
                 }
+                last_tick_fire = now_ms;
+                next_tick = now_ms + interval;
+                app.on_tick(dt);
+                activity = true;
             }
         }
 
@@ -223,8 +252,34 @@ void run_app_view<A>(&mut A app, Viewport port) {
                 cursor_shown = false;
             }
         }
-        if (!activity && !quit) {
-            sleep_ms(IDLE_SLEEP_MS);
+        if (quit) {
+            break;
+        }
+
+        // Block until the next due thing: input bytes, the tick deadline,
+        // the ESC quiet window, or the idle cap (resize pickup for
+        // tick-less apps). A poll error (EINTR) just re-evaluates.
+        Duration up2 = start.elapsed();
+        i64 wait_from = up2.as_millis();
+        i64 timeout = IDLE_POLL_MS;
+        i64 interval2 = app.tick_ms();
+        if (interval2 > 0 && next_tick > wait_from && next_tick - wait_from < timeout) {
+            timeout = next_tick - wait_from;
+        }
+        if (seq_open) {
+            Duration quiet = last_byte.elapsed();
+            i64 esc_wait = ESC_TIMEOUT_MS - quiet.as_millis();
+            if (esc_wait < 0) {
+                esc_wait = 0;
+            }
+            if (esc_wait < timeout) {
+                timeout = esc_wait;
+            }
+        }
+        pfd.revents = 0;
+        Result<i64, Error> pr = try_poll(&pfd, 1, timeout);
+        if (pr.is_err()) {
+            continue;
         }
     }
 

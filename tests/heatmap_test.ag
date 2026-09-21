@@ -1,0 +1,74 @@
+import atelier.widgets.heatmap;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import std.test;
+
+i64 cp(Buffer* buf, i64 x, i64 y) {
+    Cell* c = buf.cell_mut(x, y);
+    if (c == (Cell*)0) {
+        return 0;
+    }
+    return (i64)c.ch;
+}
+
+#[test]
+void heatmap_grids_cells_by_value_level() {
+    Heatmap map = Heatmap.new(3, 1, Vec<HeatCell>.new());
+    map.set(0, 0, 0);
+    map.set(1, 0, 50);
+    map.set(2, 0, 100);
+    // Three stride-3 cells need 3*3-1 = 8 columns.
+    Rect area = Rect.new((u16)0, (u16)0, (u16)8, (u16)1);
+    Buffer buf = Buffer.empty(area);
+    map.render(&area, &buf);
+    Color dim = Color.BrightBlack;
+    Color mid = Color.Cyan;
+    Color hot = Color.BrightGreen;
+    assert_true(buf.cell_mut(0, 0).fg == dim, "level 0 uses dimmest ramp step");
+    assert_true(buf.cell_mut(3, 0).fg == mid, "level 2 uses middle ramp step");
+    assert_true(buf.cell_mut(6, 0).fg == hot, "level 4 uses brightest ramp step");
+    assert_eq_i64(0x2588, cp(&buf, 0, 0), "cells render as full blocks");
+    assert_eq_i64(0, cp(&buf, 2, 0), "gap column stays empty");
+    assert_eq_i64(0, cp(&buf, 5, 0), "gap between mid and hot stays empty");
+    assert_eq_i64(0x2588, cp(&buf, 7, 0), "hot cell fills its second column");
+}
+
+#[test]
+void heatmap_clamps_and_reserves_legend() {
+    Heatmap map = Heatmap.new(2, 2, Vec<HeatCell>.new());
+    map.set(0, 0, -5);
+    map.set(1, 0, 999);
+    map.set(0, 1, 100);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)5, (u16)3);
+    Buffer buf = Buffer.empty(area);
+    map.render(&area, &buf);
+    Color dim = Color.BrightBlack;
+    Color hot = Color.BrightGreen;
+    assert_true(buf.cell_mut(0, 0).fg == dim, "underflow clamps to lowest step");
+    assert_true(buf.cell_mut(3, 0).fg == hot, "overflow clamps to highest step");
+    assert_eq_i64(0x30, cp(&buf, 0, 2), "legend shows min at left");
+    assert_eq_i64(0x31, cp(&buf, 2, 2), "legend max 100 starts at x=2");
+    assert_eq_i64(0x30, cp(&buf, 4, 2), "legend max ends at right edge");
+    assert_eq_i64(0x2588, cp(&buf, 0, 1), "second row still renders blocks");
+    // Storage grows lazily: only written cells occupy slots ((1,1) unset).
+    map.set(5, 0, 1);
+    map.set(0, 9, 1);
+    assert_eq_i64(3, map.values.len(), "grid stays 2x2 after stray writes");
+}
+
+#[test]
+void heatmap_set_grows_sparse_grid() {
+    Heatmap map = Heatmap.new(4, 4, Vec<HeatCell>.new());
+    map.set(2, 3, 7);
+    assert_eq_i64(15, map.values.len(), "row-major fill up to index");
+    assert_eq_i64(7, map.values.get(14).value, "target cell holds value");
+    // Legend off frees the reserved row.
+    Heatmap bare = Heatmap.new(1, 1, Vec<HeatCell>.new());
+    bare.set(0, 0, 100);
+    bare = bare.show_legend(false);
+    Rect flat = Rect.new((u16)0, (u16)0, (u16)2, (u16)1);
+    Buffer flat_buf = Buffer.empty(flat);
+    bare.render(&flat, &flat_buf);
+    assert_eq_i64(0x2588, cp(&flat_buf, 0, 0), "legend-off renders cell in 1 row");
+}

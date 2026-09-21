@@ -116,6 +116,15 @@ void term_write_sgr_num(BufWriter* out, i64 n) {
     out.write_u8((u8)109); // 'm'
 }
 
+/// Resolve a cell to its glyph: 0 (empty) renders as a space. Wide leads
+// already carry their own trailer bookkeeping via continuation cells.
+u32 cell_glyph(&Cell c) {
+    if (c.ch == (u32)0) {
+        return (u32)32;
+    }
+    return c.ch;
+}
+
 void term_write_mods(BufWriter* out, u16 mods) {
     if ((mods & MOD_BOLD) != (u16)0) {
         term_bold_on(out);
@@ -280,49 +289,66 @@ impl Terminal {
     /// Diff the back buffer to the screen, then rotate buffers. The new
     /// back buffer keeps its (stale) contents: the application re-renders
     /// fully every frame, and untouched cells diff clean.
+    ///
+    /// Output is emitted as row runs: one cursor move, then every changed
+    /// cell on that row — styled cells inline, unchanged neighbors elided by
+    /// repositioning. Contiguous single-line output reaches the terminal as
+    /// one chunk, which is what makes frames tear-free.
     void flush(&mut self) {
         Vec<CellUpdate> d = self.cur.diff(&self.prev);
-        for (i64 i = 0; i < d.len(); i = i + 1) {
+        i64 n = d.len();
+        if (n == 0) {
+            return;
+        }
+        i64 i = 0;
+        while (i < n) {
             CellUpdate* u = d.get_ptr(i);
             i64 x = (i64)u.x;
             i64 y = (i64)u.y;
-            // The continuation cell is metadata for the preceding wide glyph,
-            // not a second terminal cell. Skip it before cursor/style work so
-            // it cannot insert a redundant cursor move between adjacent text.
-            if (u.cell.continuation) {
-                continue;
+            i64 j = i + 1;
+            while (j < n && (i64)d.get_ptr(j).y == y) {
+                j = j + 1;
             }
-            if (x != self.pen_x || y != self.pen_y) {
+            if (y != self.pen_y || x != self.pen_x) {
                 self.goto_cell(x, y);
             }
-            Style cs;
-            cs.fg = u.cell.fg;
-            cs.bg = u.cell.bg;
-            cs.add_mod = u.cell.mods;
-            cs.sub_mod = (u16)0;
-            if (cs.fg != self.pen.fg || cs.bg != self.pen.bg || cs.add_mod != self.pen.add_mod) {
-                term_write_style(self.out, &cs);
-                self.pen = cs;
-            }
-            u32 ch = u.cell.ch;
-            if (ch == (u32)0) {
-                ch = (u32)32;
-            }
-            write_codepoint(self.out, ch);
-            Cell* next = self.cur.cell_mut(x + 1, y);
-            bool wide = next != (Cell*)0 && next.continuation;
-            Cell* old_next = self.prev.cell_mut(x + 1, y);
-            bool old_wide = old_next != (Cell*)0 && old_next.continuation;
-            if (wide) {
-                self.pen_x = x + 2;
-            } else if (old_wide) {
-                // Replacing a wide glyph needs to erase its former trailer.
-                write_codepoint(self.out, (u32)32);
-                self.pen_x = x + 2;
-            } else {
-                self.pen_x = x + 1;
-            }
             self.pen_y = y;
+            i64 k = i;
+            while (k < j) {
+                CellUpdate* c = d.get_ptr(k);
+                i64 cx = (i64)c.x;
+                if (c.cell.continuation) {
+                    // Metadata for the preceding wide glyph, not a terminal
+                    // cell; the pen already stepped over it. The terminal
+                    // paints the second half from the glyph itself.
+                    k = k + 1;
+                    continue;
+                }
+                // Exact-position tracking: after a wide glyph the pen sits
+                // past its trailer, and erasing a replaced wide glyph's
+                // former trailer must step the pen BACK one cell.
+                if (cx != self.pen_x) {
+                    self.goto_cell(cx, y);
+                }
+                Style cs;
+                cs.fg = c.cell.fg;
+                cs.bg = c.cell.bg;
+                cs.add_mod = c.cell.mods;
+                cs.sub_mod = (u16)0;
+                if (cs.fg != self.pen.fg || cs.bg != self.pen.bg || cs.add_mod != self.pen.add_mod) {
+                    term_write_style(self.out, &cs);
+                    self.pen = cs;
+                }
+                write_codepoint(self.out, cell_glyph(&c.cell));
+                Cell* nxt = self.cur.cell_mut(cx + 1, y);
+                if (nxt != (Cell*)0 && nxt.continuation) {
+                    self.pen_x = cx + 2;
+                } else {
+                    self.pen_x = cx + 1;
+                }
+                k = k + 1;
+            }
+            i = j;
         }
         self.out.flush();
         Buffer tmp = move self.cur;

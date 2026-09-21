@@ -1,0 +1,504 @@
+// Markdown: chat-flavored block parser producing an owned Text.
+//
+// Supported: ATX headings (#..###, deeper levels use h3), fenced code
+// blocks, bullet/ordered lists with 2-space nesting, `>` quotes, `---`
+// rules (kept as a dim literal: Text cannot know the render width),
+// paragraphs with softbreak joining. Inline: **bold**, *italic*, `code`,
+// ~~strike~~, [text](url), backslash escapes. Single `_` never toggles so
+// snake_case survives; unclosed openers style to end of line rather than
+// rewinding (predictable single pass over pathological input). Ordered
+// numbers reseed the counter (CommonMark); unclosed fences run to EOF.
+
+import std.mem.vec;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.widget;
+
+struct Markdown {
+    Style h1_style;
+    Style h2_style;
+    Style h3_style;
+    Style code_style;
+    Style code_block_style;
+    Style quote_style;
+    Style list_style;
+    Style link_style;
+    Style rule_style;
+}
+
+impl Markdown {
+    Markdown new() {
+        Markdown m;
+        m.h1_style = Style.new().fg(Color.Blue).bold();
+        m.h2_style = Style.new().fg(Color.Cyan).bold();
+        m.h3_style = Style.new().fg(Color.Green).bold();
+        m.code_style = Style.new().fg(Color.Yellow);
+        m.code_block_style = Style.new().fg(Color.Yellow);
+        m.quote_style = Style.new().fg(Color.Cyan).italic();
+        m.list_style = Style.new();
+        m.link_style = Style.new().fg(Color.Blue).underlined();
+        m.rule_style = Style.new().dim();
+        return m;
+    }
+
+    Markdown h1_style(Markdown self, Style style) {
+        self.h1_style = style;
+        return self;
+    }
+
+    Markdown code_style(Markdown self, Style style) {
+        self.code_style = style;
+        return self;
+    }
+
+    Markdown link_style(Markdown self, Style style) {
+        self.link_style = style;
+        return self;
+    }
+
+    Text parse(&self, str src) {
+        Text t;
+        t.lines = Vec<Line>.new();
+        t.owned = Vec<String>.new();
+        t.style = Style.new();
+        if (src == (str)0) {
+            return move t;
+        }
+        u8* p = (u8*)src;
+        i64 len = cstr_len(p);
+        Vec<i64> para = Vec<i64>.new();
+        Vec<i64> counters = Vec<i64>.new();
+        bool in_code = false;
+        i64 pos = 0;
+        while (pos <= len) {
+            i64 end = pos;
+            while (end < len && p[end] != (u8)10) {
+                end = end + 1;
+            }
+            if (in_code) {
+                if (markdown_is_fence(p, pos, end)) {
+                    in_code = false;
+                } else {
+                    self.push_code_line(&mut t, p, pos, end);
+                }
+                pos = end + 1;
+                continue;
+            }
+            i64 ls = pos;
+            while (ls < end && (p[ls] == (u8)32 || p[ls] == (u8)9)) {
+                ls = ls + 1;
+            }
+            if (ls >= end) {
+                self.flush_para(&mut t, p, &para);
+                para.clear();
+                counters.clear();
+                pos = end + 1;
+                continue;
+            }
+            if (markdown_is_fence(p, ls, end)) {
+                self.flush_para(&mut t, p, &para);
+                para.clear();
+                counters.clear();
+                in_code = true;
+                pos = end + 1;
+                continue;
+            }
+            i64 hashes = markdown_count_char(p, ls, end, (u8)35);
+            if (hashes > 0 && (ls + hashes >= end || p[ls + hashes] == (u8)32)) {
+                self.flush_para(&mut t, p, &para);
+                para.clear();
+                counters.clear();
+                i64 text_start = ls + hashes;
+                if (text_start < end && p[text_start] == (u8)32) {
+                    text_start = text_start + 1;
+                }
+                Style hs = self.h3_style;
+                if (hashes == 1) {
+                    hs = self.h1_style;
+                } else if (hashes == 2) {
+                    hs = self.h2_style;
+                }
+                self.push_styled_line(&mut t, p, text_start, end, hs);
+                pos = end + 1;
+                continue;
+            }
+            if (markdown_is_rule(p, ls, end)) {
+                self.flush_para(&mut t, p, &para);
+                para.clear();
+                counters.clear();
+                self.push_styled_line(&mut t, p, ls, end, self.rule_style);
+                pos = end + 1;
+                continue;
+            }
+            i64 depth = 0;
+            i64 item_start = 0;
+            i64 number = -1;
+            if (markdown_list_item(p, pos, end, &depth, &item_start, &number)) {
+                self.flush_para(&mut t, p, &para);
+                para.clear();
+                while (counters.len() <= depth) {
+                    counters.push(1);
+                }
+                while (counters.len() > depth + 1) {
+                    counters.pop();
+                }
+                if (number >= 0) {
+                    counters.set(depth, number);
+                } else {
+                    counters.set(depth, counters.get(depth) + 1);
+                }
+                self.push_list_line(&mut t, p, item_start, end, number, depth, &counters);
+                pos = end + 1;
+                continue;
+            }
+            i64 quote_start = ls;
+            while (quote_start < end && p[quote_start] == (u8)62) {
+                quote_start = quote_start + 1;
+            }
+            if (quote_start > ls) {
+                self.flush_para(&mut t, p, &para);
+                para.clear();
+                counters.clear();
+                if (quote_start < end && p[quote_start] == (u8)32) {
+                    quote_start = quote_start + 1;
+                }
+                self.push_quote_line(&mut t, p, quote_start, end);
+                pos = end + 1;
+                continue;
+            }
+            para.push(pos);
+            pos = end + 1;
+        }
+        self.flush_para(&mut t, p, &para);
+        return move t;
+    }
+
+    // Join accumulated paragraph lines with spaces, then run inline markup
+    // once so markers can span soft line breaks.
+    void flush_para(&self, &mut Text text, u8* p, &Vec<i64> para) {
+        if (para.len() <= 0) {
+            return;
+        }
+        String joined = String.new();
+        for (i64 k = 0; k < para.len(); k = k + 1) {
+            i64 start = para.get(k);
+            i64 end = start;
+            while (p[end] != (u8)0 && p[end] != (u8)10) {
+                end = end + 1;
+            }
+            if (k > 0) {
+                joined.push_str(" ");
+            }
+            for (i64 i = start; i < end; i = i + 1) {
+                joined.push(p[i]);
+            }
+        }
+        text.owned.push(move joined);
+        String* back = text.owned.get_ptr(text.owned.len() - 1);
+        Line line = Markdown.blank_line(text.style);
+        self.inline_into(text, &mut line, back, 0, back.len(), text.style, 0);
+        text.lines.push(move line);
+    }
+
+    void push_code_line(&self, &mut Text text, u8* p, i64 from, i64 to) {
+        text.owned.push(markdown_copy(p, from, to));
+        String* back = text.owned.get_ptr(text.owned.len() - 1);
+        Line line = Line.from(back.to_str());
+        line.style = self.code_block_style;
+        text.lines.push(move line);
+    }
+
+    void push_styled_line(&self, &mut Text text, u8* p, i64 from, i64 to, Style style) {
+        text.owned.push(markdown_copy(p, from, to));
+        String* back = text.owned.get_ptr(text.owned.len() - 1);
+        Line line = Markdown.blank_line(style);
+        self.inline_into(text, &mut line, back, 0, back.len(), style, 0);
+        text.lines.push(move line);
+    }
+
+    void push_quote_line(&self, &mut Text text, u8* p, i64 from, i64 to) {
+        text.owned.push(String.from_str("▌ "));
+        String* mark = text.owned.get_ptr(text.owned.len() - 1);
+        Line line = Markdown.blank_line(self.quote_style);
+        line.spans.push(Span.styled(mark.to_str(), self.quote_style));
+        text.owned.push(markdown_copy(p, from, to));
+        String* back = text.owned.get_ptr(text.owned.len() - 1);
+        self.inline_into(text, &mut line, back, 0, back.len(), self.quote_style, 0);
+        text.lines.push(move line);
+    }
+
+    void push_list_line(&self, &mut Text text, u8* p, i64 from, i64 to, i64 number, i64 depth, &Vec<i64> counters) {
+        text.owned.push(markdown_bullet(counters, depth, number, depth * 2));
+        String* mark = text.owned.get_ptr(text.owned.len() - 1);
+        Line line = Markdown.blank_line(self.list_style);
+        line.spans.push(Span.styled(mark.to_str(), self.list_style));
+        text.owned.push(markdown_copy(p, from, to));
+        String* back = text.owned.get_ptr(text.owned.len() - 1);
+        self.inline_into(text, &mut line, back, 0, back.len(), self.list_style, 0);
+        text.lines.push(move line);
+    }
+
+    Line blank_line(Style style) {
+        Line line = Line.from("");
+        line.style = style;
+        line.spans.clear();
+        return move line;
+    }
+
+    // Single-pass inline scanner with a bold/italic/strike stack. Markers
+    // always toggle (never rewind), so pathological nesting degrades to
+    // styled-to-EOL instead of quadratic backtracking.
+    void inline_into(&self, &mut Text text, &mut Line line, String* src, i64 from, i64 to, Style base, i64 depth) {
+        if (from >= to) {
+            return;
+        }
+        // Buffer pointer and length are read once up front: owned pushes
+        // below may relocate String headers, but never their buffers.
+        i64 src_len = src.len();
+        u8* p = (u8*)src.to_str();
+        self.inline_range(text, line, p, src_len, from, to, base, depth);
+    }
+
+    void inline_range(&self, &mut Text text, &mut Line line, u8* p, i64 src_len, i64 from, i64 to, Style base, i64 depth) {
+        if (from >= to) {
+            return;
+        }
+        if (to > src_len) {
+            to = src_len;
+        }
+        i64 seg = from;
+        i64 i = from;
+        i64 bold = 0;
+        i64 italic = 0;
+        i64 strike = 0;
+        while (i < to) {
+            u8 c = p[i];
+            Style cur = markdown_toggle(base, bold, italic, strike);
+            if (c == (u8)92 && i + 1 < to && markdown_is_marker(p[i + 1])) {
+                markdown_flush(text, line, p, src_len, seg, i, cur);
+                seg = i + 1;
+                i = i + 2;
+                continue;
+            }
+            if (c == (u8)96) {
+                i64 k = i + 1;
+                while (k < to && p[k] != (u8)96) {
+                    k = k + 1;
+                }
+                if (k >= to) {
+                    i = i + 1;
+                    continue;
+                }
+                markdown_flush(text, line, p, src_len, seg, i, cur);
+                markdown_flush(text, line, p, src_len, i + 1, k, cur.patch(self.code_style));
+                seg = k + 1;
+                i = k + 1;
+                continue;
+            }
+            if (c == (u8)42 && i + 1 < to && p[i + 1] == (u8)42) {
+                markdown_flush(text, line, p, src_len, seg, i, cur);
+                if (bold > 0) {
+                    bold = 0;
+                } else {
+                    bold = 1;
+                }
+                seg = i + 2;
+                i = i + 2;
+                continue;
+            }
+            if (c == (u8)42) {
+                markdown_flush(text, line, p, src_len, seg, i, cur);
+                if (italic > 0) {
+                    italic = 0;
+                } else {
+                    italic = 1;
+                }
+                seg = i + 1;
+                i = i + 1;
+                continue;
+            }
+            if (c == (u8)126 && i + 1 < to && p[i + 1] == (u8)126) {
+                markdown_flush(text, line, p, src_len, seg, i, cur);
+                if (strike > 0) {
+                    strike = 0;
+                } else {
+                    strike = 1;
+                }
+                seg = i + 2;
+                i = i + 2;
+                continue;
+            }
+            if (c == (u8)91 && depth < 3) {
+                i64 close = markdown_find_link(p, i, to);
+                if (close < 0) {
+                    i = i + 1;
+                    continue;
+                }
+                markdown_flush(text, line, p, src_len, seg, i, cur);
+                i64 url_end = close + 2;
+                while (url_end < to && p[url_end] != (u8)41) {
+                    url_end = url_end + 1;
+                }
+                Style link = cur.patch(self.link_style);
+                self.inline_range(text, line, p, src_len, i + 1, close, link, depth + 1);
+                seg = url_end + 1;
+                i = url_end + 1;
+                continue;
+            }
+            i = i + 1;
+        }
+        markdown_flush(text, line, p, src_len, seg, to, markdown_toggle(base, bold, italic, strike));
+    }
+}
+
+// Fold the toggle stack over a base style. One funnel so bold, italic,
+// and strike combine identically at every flush point.
+Style markdown_toggle(Style base, i64 bold, i64 italic, i64 strike) {
+    Style cur = base;
+    if (bold > 0) {
+        cur = cur.patch(Style.new().bold());
+    }
+    if (italic > 0) {
+        cur = cur.patch(Style.new().italic());
+    }
+    if (strike > 0) {
+        cur = cur.patch(Style.new().add_modifier(MOD_CROSSED_OUT));
+    }
+    return cur;
+}
+
+// Bullet marker with nesting indent, built in one pass so no intermediate
+// owns-and-drops dance is needed.
+String markdown_bullet(&Vec<i64> counters, i64 depth, i64 number, i64 indent) {
+    String s = String.new();
+    for (i64 k = 0; k < indent; k = k + 1) {
+        s.push_str(" ");
+    }
+    if (number >= 0) {
+        String num = @format("{}. ", counters.get(depth));
+        s.push_str(num.to_str());
+        num.drop();
+    } else {
+        s.push_str("• ");
+    }
+    return move s;
+}
+
+// Copy a source byte range into an owned String. Ranges always end on
+// ASCII marker bytes or line ends, never inside a multibyte sequence.
+String markdown_copy(u8* p, i64 from, i64 to) {
+    String s = String.new();
+    for (i64 i = from; i < to; i = i + 1) {
+        s.push(p[i]);
+    }
+    return move s;
+}
+
+// Copy a subrange of an owned line into Text storage and span it.
+void markdown_flush(&mut Text text, &mut Line line, u8* p, i64 src_len, i64 from, i64 to, Style style) {
+    if (from >= to) {
+        return;
+    }
+    if (from >= src_len) {
+        return;
+    }
+    if (to > src_len) {
+        to = src_len;
+    }
+    text.owned.push(markdown_copy(p, from, to));
+    String* back = text.owned.get_ptr(text.owned.len() - 1);
+    line.spans.push(Span.styled(back.to_str(), style));
+}
+
+// Byte offset of `](` closing a link starting at `[`, or -1.
+i64 markdown_find_link(u8* p, i64 from, i64 to) {
+    i64 i = from + 1;
+    while (i + 1 < to) {
+        if (p[i] == (u8)93 && p[i + 1] == (u8)40) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+bool markdown_is_marker(u8 c) {
+    return c == (u8)42 || c == (u8)95 || c == (u8)96 || c == (u8)126 || c == (u8)91 || c == (u8)93 || c == (u8)40 || c == (u8)41 || c == (u8)92 || c == (u8)62 || c == (u8)35;
+}
+
+bool markdown_is_fence(u8* p, i64 from, i64 to) {
+    if (from + 3 > to) {
+        return false;
+    }
+    return p[from] == (u8)96 && p[from + 1] == (u8)96 && p[from + 2] == (u8)96;
+}
+
+i64 markdown_count_char(u8* p, i64 from, i64 to, u8 c) {
+    i64 n = 0;
+    while (from + n < to && p[from + n] == c) {
+        n = n + 1;
+    }
+    return n;
+}
+
+bool markdown_is_rule(u8* p, i64 from, i64 to) {
+    i64 n = 0;
+    u8 mark = 0;
+    i64 i = from;
+    while (i < to) {
+        u8 c = p[i];
+        if (c == (u8)32 || c == (u8)9) {
+            i = i + 1;
+            continue;
+        }
+        if (c != (u8)45 && c != (u8)42 && c != (u8)95) {
+            return false;
+        }
+        if (mark == 0) {
+            mark = c;
+        } else if (c != mark) {
+            return false;
+        }
+        n = n + 1;
+        i = i + 1;
+    }
+    return n >= 3;
+}
+
+// List item probe: depth, text start, and written number (-1 bullets).
+// Out-params by pointer (single funnel cannot return a triple).
+bool markdown_list_item(u8* p, i64 from, i64 to, i64* depth, i64* start, i64* number) {
+    i64 indent = 0;
+    while (from + indent < to && (p[from + indent] == (u8)32 || p[from + indent] == (u8)9)) {
+        indent = indent + 1;
+    }
+    *depth = indent / 2;
+    i64 m = from + indent;
+    if (m < to && (p[m] == (u8)45 || p[m] == (u8)42 || p[m] == (u8)43)) {
+        if (m + 1 < to && (p[m + 1] == (u8)32 || p[m + 1] == (u8)9)) {
+            *start = m + 2;
+            *number = -1;
+            return true;
+        }
+        return false;
+    }
+    i64 digits = 0;
+    while (m + digits < to && p[m + digits] >= (u8)48 && p[m + digits] <= (u8)57) {
+        digits = digits + 1;
+    }
+    if (digits > 0 && digits < 10 && m + digits < to && (p[m + digits] == (u8)46 || p[m + digits] == (u8)41)) {
+        i64 after = m + digits + 1;
+        if (after < to && (p[after] == (u8)32 || p[after] == (u8)9)) {
+            i64 value = 0;
+            for (i64 k = 0; k < digits; k = k + 1) {
+                value = value * 10 + ((i64)p[m + k] - 48);
+            }
+            *start = after + 1;
+            *number = value;
+            return true;
+        }
+    }
+    return false;
+}

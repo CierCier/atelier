@@ -1,0 +1,75 @@
+import atelier.widgets.column;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import std.test;
+
+i64 cp(Buffer* buf, i64 x, i64 y) {
+    Cell* c = buf.cell_mut(x, y);
+    if (c == (Cell*)0) {
+        return 0;
+    }
+    return (i64)c.ch;
+}
+
+#[test]
+void column_chart_bars_grow_upward_with_labels() {
+    Vec<ColumnItem> bars = Vec<ColumnItem>.new();
+    bars.push(ColumnItem.new("a", (u16)0));
+    bars.push(ColumnItem.new("b", (u16)100));
+    bars.push(ColumnItem.new("c", (u16)50));
+    ColumnChart chart = ColumnChart.new(move bars).max_value((u16)100);
+    // 4 rows: value row + 2 content rows + label row.
+    Rect area = Rect.new((u16)0, (u16)0, (u16)7, (u16)4);
+    Buffer buf = Buffer.empty(area);
+    chart.render(&area, &buf);
+    Color dim = Color.BrightBlack;
+    assert_true(buf.cell_mut(0, 2).fg == dim, "zero bar reads as an empty tick");
+    assert_eq_i64(0x2588, cp(&buf, 2, 2), "full bar fills above the label row");
+    assert_eq_i64(0x31, cp(&buf, 2, 0), "value 100 rides above the full bar");
+    assert_eq_i64(0x2588, cp(&buf, 4, 2), "half bar of 2 rows fills its lower row");
+    assert_eq_i64(97, cp(&buf, 0, 3), "label sits on the bottom row");
+    assert_eq_i64(0, cp(&buf, 6, 2), "unused slot stays empty");
+}
+
+#[test]
+void column_chart_labels_and_baseline() {
+    Vec<ColumnItem> bars = Vec<ColumnItem>.new();
+    bars.push(ColumnItem.new("a", (u16)0));
+    bars.push(ColumnItem.new("b", (u16)100));
+    ColumnChart chart = ColumnChart.new(move bars).max_value((u16)100);
+    Rect area = Rect.new((u16)0, (u16)0, (u16)4, (u16)3);
+    Buffer buf = Buffer.empty(area);
+    chart.render(&area, &buf);
+    // Height 3 reserves a value row, so a full bar tips one row down.
+    assert_eq_i64(97, cp(&buf, 0, 2), "label a on bottom row");
+    assert_eq_i64(0x20, cp(&buf, 0, 1), "zero bar leaves a blank tick");
+    assert_eq_i64(0x31, cp(&buf, 2, 0), "full bar value label on top row");
+    // 1-row layout: tips only, no labels.
+    Rect flat = Rect.new((u16)0, (u16)0, (u16)4, (u16)1);
+    Buffer flat_buf = Buffer.empty(flat);
+    chart.render(&flat, &flat_buf);
+    assert_eq_i64(0x2588, cp(&flat_buf, 2, 0), "full bar tip in 1-row layout");
+    assert_eq_i64(0x20, cp(&flat_buf, 0, 0), "zero bar shows blank tick in 1-row layout");
+}
+
+#[test]
+void column_chart_zero_clamp_and_gap_fallback() {
+    // degenerate max_value pins to 1 so values cannot divide by zero.
+    Vec<ColumnItem> flat_bars = Vec<ColumnItem>.new();
+    flat_bars.push(ColumnItem.new("a", (u16)5));
+    flat_bars.push(ColumnItem.new("b", (u16)3));
+    ColumnChart flat = ColumnChart.new(move flat_bars);
+    // More items than columns: later items simply have no slot.
+    Vec<ColumnItem> many = Vec<ColumnItem>.new();
+    many.push(ColumnItem.new("x", (u16)1));
+    many.push(ColumnItem.new("y", (u16)2));
+    many.push(ColumnItem.new("z", (u16)3));
+    ColumnChart tight = ColumnChart.new(move many).max_value((u16)3);
+    Rect one = Rect.new((u16)0, (u16)0, (u16)1, (u16)3);
+    Buffer one_buf = Buffer.empty(one);
+    tight.render(&one, &one_buf);
+    // Value 1 of 3 in a single content row renders an eighth tip.
+    assert_eq_i64(0x2582, cp(&one_buf, 0, 1), "first bar tips in the only column");
+    assert_eq_i64(120, cp(&one_buf, 0, 2), "label x on the bottom row");
+}

@@ -1,0 +1,228 @@
+// ColumnChart: vertical bars with bottom labels — BarChart's transposed
+// sibling. Bars grow upward; a full-height bar can also carry a 1-row
+// value label above it (which then raises the content ceiling).
+//
+// With ColumnChart here and Sparkline gaining `rtl`, Atelier covers the
+// three default render directions: horizontal (BarChart), vertical
+// (ColumnChart), and right-to-left (Sparkline).
+
+import std.mem.vec;
+import std.fmt;
+import atelier.buffer;
+import atelier.layout;
+import atelier.style;
+import atelier.text;
+import atelier.update;
+import atelier.widget;
+import atelier.widgets.block;
+import atelier.widgets.gauge;
+
+struct ColumnItem {
+    String label;
+    u16 value;
+    Style style;
+}
+
+impl ColumnItem {
+    ColumnItem new(str label, u16 value) {
+        ColumnItem b;
+        b.label = String.from_str(label);
+        b.value = value;
+        b.style = Style.new();
+        return move b;
+    }
+
+    ColumnItem styled(str label, u16 value, Style style) {
+        ColumnItem b = ColumnItem.new(label, value);
+        b.style = style;
+        return move b;
+    }
+}
+
+struct ColumnChart {
+    Vec<ColumnItem> items;
+    UpdateInterval cadence;
+    u16 max_value;
+    Style style;
+    Style bar_style;
+    Style empty_style;
+    Style value_style;
+    Block block;
+    bool has_block;
+}
+
+impl ColumnChart {
+    ColumnChart new(Vec<ColumnItem> items) {
+        ColumnChart b;
+        b.items = move items;
+        b.cadence = UpdateInterval.new(0);
+        b.max_value = 0;
+        b.style = Style.new();
+        b.bar_style = Style.new().fg(Color.Blue);
+        b.empty_style = Style.new().fg(Color.BrightBlack);
+        b.value_style = Style.new().fg(Color.BrightBlack);
+        b.block = Block.new();
+        b.has_block = false;
+        return move b;
+    }
+
+    ColumnChart max_value(ColumnChart self, u16 max_value) {
+        self.max_value = max_value;
+        return move self;
+    }
+
+    ColumnChart style(ColumnChart self, Style style) {
+        self.style = style;
+        return move self;
+    }
+
+    ColumnChart bar_style(ColumnChart self, Style style) {
+        self.bar_style = style;
+        return move self;
+    }
+
+    ColumnChart empty_style(ColumnChart self, Style style) {
+        self.empty_style = style;
+        return move self;
+    }
+
+    ColumnChart value_style(ColumnChart self, Style style) {
+        self.value_style = style;
+        return move self;
+    }
+
+    ColumnChart block(ColumnChart self, Block block) {
+        self.block = block;
+        self.has_block = true;
+        return move self;
+    }
+
+    ColumnChart update_interval(ColumnChart self, i64 interval_ms) {
+        self.cadence = self.cadence.interval(interval_ms);
+        return move self;
+    }
+
+    i64 update_interval_ms(&self) {
+        return self.cadence.milliseconds();
+    }
+
+    i64 advance(&mut self, i64 elapsed_ms) {
+        return self.cadence.advance(elapsed_ms);
+    }
+}
+
+impl Widget for ColumnChart {
+    // Layout: [value row] [bar rows] [label row]. Bars fill upward from
+    // the label baseline; every column draws a visible bar cell (flat
+    // values never vanish), so a zero bar reads as a tick, not a gap.
+    // Cells render through set_string, so clipped edges truncate.
+    void render(&self, &Rect area, &mut Buffer buf) {
+        Rect inner = *area;
+        if (self.has_block) {
+            self.block.render(area, buf);
+            inner = self.block.inner(*area);
+        }
+        buf.set_style(inner, self.style);
+        if (inner.width == (u16)0 || inner.height == (u16)0) {
+            return;
+        }
+        i64 n = self.items.len();
+        if (n <= 0) {
+            return;
+        }
+        u16 max_value = self.max_value;
+        if (max_value == (u16)0) {
+            max_value = 1;
+            for (i64 i = 0; i < n; i = i + 1) {
+                ColumnItem* item = self.items.get_ptr(i);
+                if (item.value > max_value) {
+                    max_value = item.value;
+                }
+            }
+        }
+        i64 width = (i64)inner.width;
+        i64 height = (i64)inner.height;
+        // Even slots across the width; bars are 1-2 cells centered in their
+        // slot (wide slots stay capped so one fat bar never looks special).
+        i64 pitch = width / n;
+        if (pitch < 1) {
+            pitch = 1;
+        }
+        i64 content = height;
+        bool show_value = height > 2;
+        if (show_value) {
+            content = content - 1;
+        }
+        // A 1-row chart drops labels and shows bare bar tips instead.
+        bool show_labels = height > 1;
+        if (show_labels) {
+            content = content - 1;
+        }
+        if (content <= 0) {
+            return;
+        }
+        i64 label_y = (i64)inner.y + height - 1;
+        i64 base_y = label_y - 1;
+        if (!show_labels) {
+            base_y = (i64)inner.y;
+        }
+        for (i64 i = 0; i < n; i = i + 1) {
+            ColumnItem* item = self.items.get_ptr(i);
+            i64 slot = pitch;
+            if (i == n - 1) {
+                // Last slot absorbs the width remainder.
+                slot = width - i * pitch;
+            }
+            i64 bar_w = slot;
+            if (bar_w > 2) {
+                bar_w = 2;
+            }
+            i64 x = (i64)inner.x + i * pitch + (slot - bar_w) / 2;
+            if (x + bar_w > (i64)inner.x + width) {
+                bar_w = (i64)inner.x + width - x;
+            }
+            if (bar_w <= 0) {
+                break;
+            }
+            i64 filled = content * (i64)item.value / (i64)max_value;
+            i64 eighth = (content * (i64)item.value - filled * (i64)max_value) * 8 / (i64)max_value;
+            if (filled > content) {
+                filled = content;
+            }
+            bool full = filled >= content;
+            if (full && eighth > 0) {
+                // Value label rides one row above a full bar; it must fit
+                // above the baseline to avoid overwriting the bar tip.
+                if (show_value) {
+                    filled = content - 1;
+                } else {
+                    eighth = 0;
+                }
+            }
+            Style bs = self.bar_style.patch(item.style);
+            for (i64 row = 0; row < content; row = row + 1) {
+                i64 y = base_y - row;
+                str glyph = " ";
+                Style gs = self.empty_style;
+                if (row < filled) {
+                    glyph = "█";
+                    gs = bs;
+                } else if (row == filled && eighth > 0) {
+                    glyph = vbar_tip(eighth);
+                    gs = bs;
+                }
+                for (i64 cx = 0; cx < bar_w; cx = cx + 1) {
+                    buf.set_string(x + cx, y, glyph, gs, 1);
+                }
+            }
+            if (show_labels) {
+                buf.set_string(x, label_y, item.label.to_str(), item.style, bar_w);
+            }
+            if (show_value && full) {
+                String text = @format("{}", (i64)item.value);
+                buf.set_string(x, base_y - content, text.to_str(), self.value_style, bar_w);
+                text.drop();
+            }
+        }
+    }
+}
