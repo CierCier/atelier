@@ -25,6 +25,11 @@ struct Frame {
     Rect area;
 }
 
+/// Max unchanged cells rewritten to bridge a gap between changed runs.
+/// A cursor move costs roughly as much as the glyphs it skips and can split
+/// a row into two output chunks; three-glyph gaps cost ~1 byte per cell.
+const i64 FLUSH_GAP_FILL = 3;
+
 struct Terminal {
     Buffer cur;
     Buffer prev;
@@ -467,99 +472,94 @@ impl Terminal {
         self.out.flush();
     }
 
+    /// Emit one cell at (x, y): reposition if the pen is not already there,
+    /// write the differential style, then the glyph. Wide leads advance the
+    /// pen two cells (the trailer is painted by the terminal itself).
+    void emit_cell(&mut self, i64 x, i64 y, Cell* c) {
+        if (x != self.pen_x || y != self.pen_y) {
+            self.goto_cell(x, y);
+        }
+        self.pen_y = y;
+        Style cs;
+        cs.fg = c.fg;
+        cs.bg = c.bg;
+        cs.add_mod = c.mods;
+        cs.sub_mod = (u16)0;
+        term_write_style_diff(self.out, &cs, &self.pen);
+        self.pen = cs;
+        write_codepoint(self.out, cell_glyph(c));
+        Cell* nxt = self.cur.cell_mut(x + 1, y);
+        if (nxt != (Cell*)0 && nxt.continuation) {
+            self.pen_x = x + 2;
+        } else {
+            self.pen_x = x + 1;
+        }
+    }
+
+    /// Column of the next changed cell in row y within [from, limit), or
+    /// limit when none. Bounds the gap-fill lookahead.
+    i64 next_changed(&self, i64 y, i64 from, i64 limit, i64 w) {
+        i64 base = y * w;
+        for (i64 x = from; x < limit; x = x + 1) {
+            Cell* c = self.cur.cells.get_ptr(base + x);
+            Cell* o = self.prev.cells.get_ptr(base + x);
+            if (!cell_eq(c, o)) {
+                return x;
+            }
+        }
+        return limit;
+    }
+
     /// Diff the back buffer to the screen, then rotate buffers. The new
     /// back buffer keeps its (stale) contents: the application re-renders
     /// fully every frame, and untouched cells diff clean.
     ///
-    /// Output is emitted as row runs: one cursor move, then every changed
-    /// cell on that row — styled cells inline, unchanged neighbors elided by
-    /// repositioning. Gaps of same-style glyphs are rewritten instead of
-    /// skipped, so a dirty run with small holes still lands as one chunk —
-    /// that is what makes frames tear-free.
+    /// Streams one row at a time with no intermediate update list: clean
+    /// rows cost a pointer sweep and nothing else; dirty rows emit one move
+    /// per run. Short same-style gaps between updates are rewritten instead
+    /// of skipped so a dirty run with small holes still lands as one chunk
+    /// (fewer escapes, no split-row tearing).
     void flush(&mut self) {
-        Vec<CellUpdate> d = self.cur.diff(&self.prev);
-        i64 n = d.len();
-        if (n == 0) {
-            return;
-        }
-        i64 i = 0;
-        while (i < n) {
-            CellUpdate* u = d.get_ptr(i);
-            i64 x = (i64)u.x;
-            i64 y = (i64)u.y;
-            i64 j = i + 1;
-            while (j < n && (i64)d.get_ptr(j).y == y) {
-                j = j + 1;
+        i64 w = (i64)self.cur.area.width;
+        i64 h = (i64)self.cur.area.height;
+        for (i64 y = 0; y < h; y = y + 1) {
+            i64 base = y * w;
+            i64 first = -1;
+            i64 last = -1;
+            for (i64 x = 0; x < w; x = x + 1) {
+                Cell* c = self.cur.cells.get_ptr(base + x);
+                Cell* o = self.prev.cells.get_ptr(base + x);
+                if (!cell_eq(c, o)) {
+                    if (first < 0) {
+                        first = x;
+                    }
+                    last = x;
+                }
             }
-            if (y != self.pen_y || x != self.pen_x) {
-                self.goto_cell(x, y);
+            if (first < 0) {
+                continue;
             }
-            self.pen_y = y;
-            i64 k = i;
-            while (k < j) {
-                CellUpdate* c = d.get_ptr(k);
-                i64 cx = (i64)c.x;
-                if (c.cell.continuation) {
+            for (i64 x = first; x <= last; x = x + 1) {
+                Cell* c = self.cur.cells.get_ptr(base + x);
+                Cell* o = self.prev.cells.get_ptr(base + x);
+                if (cell_eq(c, o)) {
+                    // Unchanged cell: rewrite it only while it bridges a
+                    // short distance to the next change — glyphs plus at
+                    // most one style diff always beat a move + re-style.
+                    if (self.pen_x == x && self.pen_y == y
+                        && self.next_changed(y, x + 1, last + 1, w) - x <= FLUSH_GAP_FILL) {
+                        self.emit_cell(x, y, c);
+                    }
+                    continue;
+                }
+                if (c.continuation) {
                     // Metadata for the preceding wide glyph, not a terminal
                     // cell; the pen already stepped over it. The terminal
                     // paints the second half from the glyph itself.
-                    k = k + 1;
                     continue;
                 }
-                // Exact-position tracking: after a wide glyph the pen sits
-                // past its trailer, and erasing a replaced wide glyph's
-                // former trailer must step the pen BACK one cell.
-                if (cx != self.pen_x) {
-                    self.goto_cell(cx, y);
-                }
-                Style cs;
-                cs.fg = c.cell.fg;
-                cs.bg = c.cell.bg;
-                cs.add_mod = c.cell.mods;
-                cs.sub_mod = (u16)0;
-                term_write_style_diff(self.out, &cs, &self.pen);
-                self.pen = cs;
-                write_codepoint(self.out, cell_glyph(&c.cell));
-                bool wide = false;
-                Cell* nxt = self.cur.cell_mut(cx + 1, y);
-                if (nxt != (Cell*)0 && nxt.continuation) {
-                    wide = true;
-                    self.pen_x = cx + 2;
-                } else {
-                    self.pen_x = cx + 1;
-                }
-                k = k + 1;
-                // Gap fill: rewrite a short run of unchanged, style-equal,
-                // narrow cells between updates. A cursor move costs about as
-                // much as the glyphs and can split the row into two chunks
-                // (tearing); three-glyph gaps cost ~1 byte per cell.
-                if (!wide) {
-                    while (k < j) {
-                        CellUpdate* g = d.get_ptr(k);
-                        i64 gx = (i64)g.x;
-                        if (g.cell.continuation || gx != self.pen_x) {
-                            break;
-                        }
-                        Style gs;
-                        gs.fg = g.cell.fg;
-                        gs.bg = g.cell.bg;
-                        gs.add_mod = g.cell.mods;
-                        gs.sub_mod = (u16)0;
-                        if (gs.fg != cs.fg || gs.bg != cs.bg || gs.add_mod != cs.add_mod) {
-                            break;
-                        }
-                        // Only rewrite when the previous cell's style still
-                        // matches (no hidden style change mid-gap) and the
-                        // cell content is what we expect (narrow, unchanged).
-                        term_write_style_diff(self.out, &gs, &self.pen);
-                        self.pen = gs;
-                        write_codepoint(self.out, cell_glyph(&g.cell));
-                        self.pen_x = gx + 1;
-                        k = k + 1;
-                    }
-                }
+                self.emit_cell(x, y, c);
             }
-            i = j;
         }
         self.out.flush();
         Buffer tmp = move self.cur;

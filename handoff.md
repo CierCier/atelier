@@ -14,7 +14,7 @@ libraries — 1:1 ratatui experience, then beyond.
   `column_test.ag` new, RTL cases moved into `gauge_test.ag`). Untracked:
   `handoff.md`, `markdown.ag` +
   `markdown_test.ag` (done, verified — wire into the commit set).
-- **Smoothness phase DONE (uncommitted, verified):**
+- **Smoothness phase committed `b1312ef`:**
   - `app.ag`: idle loop now blocks in `poll(2)` (POLLIN on stdin, timeout =
     min(next tick, ESC window, 250ms cap)) instead of a 5ms sleep spin —
     zero wakeups and zero output when idle; single draw per pass (the old
@@ -23,13 +23,22 @@ libraries — 1:1 ratatui experience, then beyond.
     elapsed ms; input drain caps at 256 bytes per pass so pastes cannot
     starve ticks.
   - `terminal.ag`: `flush()` emits row runs — one move per run, cells
-    written contiguously, unchanged gaps skipped with a single reposition.
-    Contiguous text lands in one write chunk → no mid-row tearing.
+    written contiguously. Contiguous text lands in one write chunk → no
+    mid-row tearing.
   - `demo.ag`: meter/bar animations (Gauge, LineGauge, BarChart,
     ColumnChart) interpolate from ms (`pulse_ms` + `demo_ms`) instead of
-    stepping whole interval units; `update_frame` documented tick-exact.
-  - Measured in PTY: animation ≈ 471 B/s, idle exactly 0 B, page switches
-    0.6–26 KB as compact runs, clean exit.
+    stepping whole interval units.
+- **Perf phase committed `e08bf65`** (demo benchmark, PTY, 24x100):
+  - Gap fill: short same-style gaps between changed cells are rewritten
+    instead of repositioning — merges row fragments into one chunk.
+  - Differential SGR: `term_write_style_diff` emits one combined sequence
+    with only changed attributes (mods off-codes 22/23/24/25/27/28/29);
+    bold/dim survive recolors, no reset flicker.
+  - Numbers vs pre-perf: bytes −41%, SGR sequences −77%, moves −14% over
+    a 32-page walk; animation 471→315 B/s; child CPU ~0.1% either way.
+  - Resize stress PASS both modes (grow/shrink/40ms churn/1x40/2x10,
+    probes alive after each, clean exits, inline: 0 absolute moves).
+  - Idle measured at exactly 0 bytes.
 - `a.out` (stale) deleted.
 
 ## How to validate
