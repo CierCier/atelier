@@ -421,6 +421,17 @@ impl Terminal {
         self.out.flush();
     }
 
+    /// Re-anchor the style pen to the terminal's real SGR state. We only
+    // model the attributes we emit, so any earlier output (shell, build
+    // logs, a previous frame) can leave bold/reverse active. Differential
+    // emission then believes plain cells need nothing — and the stale
+    // attributes paint them as solid blocks. An explicit reset makes the
+    // baseline real before any cell work proceeds.
+    void sync_pen(&mut self) {
+        term_sgr_reset(self.out);
+        self.pen = Style.new();
+    }
+
     /// Single funnel for every cursor move: absolute in fullscreen,
     // relative deltas in inline mode (n=0 would emit as 1, so skip axes).
     void goto_cell(&mut self, i64 x, i64 y) {
@@ -570,6 +581,7 @@ impl Terminal {
     /// Erase the screen and forget all state (forces a full redraw next).
     void clear(&mut self) {
         if (self.relative) {
+            self.sync_pen();
             // Absolute erase would wipe scrollback above: blank region rows.
             for (i64 row = 0; row < (i64)self.area.height; row = row + 1) {
                 self.goto_cell(0, row);
@@ -581,6 +593,7 @@ impl Terminal {
             self.pen = Style.new();
             return;
         }
+        self.sync_pen();
         term_erase_screen(self.out);
         term_move_to(self.out, 1, 1);
         self.out.flush();
@@ -603,7 +616,7 @@ impl Terminal {
         self.area = a;
         self.cur.resize(a);
         self.prev.resize(a);
-        self.pen = Style.new();
+        self.sync_pen();
         // Relative pen must stay exact (deltas derive from it); absolute
         // positioning re-anchors freely.
         if (!self.relative) {

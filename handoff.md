@@ -105,6 +105,10 @@ SILVER_CACHE_DIR=/tmp/opencode/demo \
    discarded by the raw-mode switch (TCSAFLUSH). Wait ~3s after build
    output appears, then send keys with delays; drain the PTY continuously
    or the TUI blocks on a full buffer (the harness times out, not the app).
+10. **`term_pty_test` / `term_loop_test` need `/bin/echo`.** Both hardcode
+    that path, so they fail on NixOS (no FHS `/bin`; child exits 127 with
+    no output). Verified 19/19 + 20/20 green inside a kitty child with a
+    resolvable echo — mechanism sound, failure purely environmental.
 10. **`str` has no `.equals`.** Compare span/text borrows with a byte-loop
     helper (`streq` in `markdown_test.ag`); only `String` has `.equals`.
 11. **`Line.from` pre-populates a default span.** Builders that fill spans

@@ -112,6 +112,11 @@ void run_app_view<A>(&mut A app, Viewport port) {
         t = Terminal.inline(&STDOUT, inline_height);
     }
     t.hide_cursor();
+    // Establish a known SGR baseline: whatever the shell or build output
+    // left active (bold, reverse) would otherwise persist across exec and
+    // alt-screen, and differential style emission would believe plain
+    // cells need no escape — painting them with the stale attributes.
+    t.sync_pen();
     if (!inline_mode) {
         term_enter_alt(&STDOUT);
         STDOUT.flush();
@@ -288,6 +293,7 @@ void run_app_view<A>(&mut A app, Viewport port) {
     } else {
         t.exit_inline();
     }
+    term_sgr_reset(&STDOUT);
     t.show_cursor();
     STDOUT.flush();
     if (restd) {
