@@ -8,7 +8,7 @@
 import std.io.file;
 import std.sys.result;
 import std.sys.errno;
-import std.sys.socket;
+import std.sys.os;
 import std.time;
 import std.term;
 import atelier.terminal;
@@ -141,12 +141,10 @@ void run_app_view<A>(&mut A app, Viewport port) {
     // next_tick = 0 fires the first tick immediately, which also draws the
     // first frame for ticked apps (tick-less apps draw via `first`).
     i64 next_tick = 0;
-    // One pollfd for stdin; every idle wait blocks here instead of sleeping
-    // in a spin loop, so idle apps make zero wakeups per frame.
-    PollFd pfd;
-    pfd.fd = 0;
-    pfd.events = (i16)POLLIN;
-    pfd.revents = 0;
+    // Every idle wait blocks for stdin readability instead of sleeping in
+    // a spin loop, so idle apps make zero wakeups per frame. Portable over
+    // the sys_wait_readable seam (poll(2) on Linux, WaitForSingleObject on
+    // the stdin handle on Windows).
     while (!quit) {
         bool activity = first;
         first = false;
@@ -281,9 +279,7 @@ void run_app_view<A>(&mut A app, Viewport port) {
                 timeout = esc_wait;
             }
         }
-        pfd.revents = 0;
-        Result<i64, Error> pr = try_poll(&pfd, 1, timeout);
-        if (pr.is_err()) {
+        if (sys_wait_readable(0, timeout) < 0) {
             continue;
         }
     }
